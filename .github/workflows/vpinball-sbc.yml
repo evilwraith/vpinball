@@ -54,7 +54,7 @@ jobs:
     steps:
       - run: |
           sudo apt-get update
-          sudo apt install cmake nasm bison zlib1g-dev libdrm-dev libgbm-dev libglu1-mesa-dev libegl-dev libgl1-mesa-dev libwayland-dev libwayland-egl-backend-dev libudev-dev libx11-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libxrandr-dev libasound2-dev libgpiod-dev
+          sudo apt install cmake nasm bison autoconf pkg-config libtool zlib1g-dev libdrm-dev libgbm-dev libglu1-mesa-dev libegl-dev libgl1-mesa-dev libwayland-dev libwayland-egl-backend-dev wayland-protocols libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdecor-0-dev libudev-dev libx11-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libxrandr-dev libasound2-dev libgpiod-dev libserialport-dev libasound2-dev libpulse-dev libpipewire-0.3-dev
       - uses: actions/checkout@v4
       - name: Calculate external cache timestamp
         run: |
