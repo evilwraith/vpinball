@@ -82,6 +82,10 @@ elseif(BUILD_RK3588)
    target_include_directories(vpinball PRIVATE
       /usr/include/libdrm
    )
+   target_link_libraries(vpinball PUBLIC
+      gbm
+      drm
+   )
 endif()
 
 target_compile_options(vpinball PUBLIC
