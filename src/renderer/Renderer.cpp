@@ -30,6 +30,27 @@ extern marker_series series;
 
 #define MAX_BALL_SHADOW 8
 
+#if defined(__RK3588__)
+static inline bool ShouldRotateScoreView(const VPXRenderContext2D* ctx)
+{
+   if (!ctx || ctx->window != VPXWindowId::VPXWINDOW_ScoreView)
+      return false;
+   const char* driver = SDL_GetCurrentVideoDriver();
+   return driver && strcmp(driver, "kmsdrm") == 0;
+}
+
+static inline void RotateVertsScoreView90CW(Vertex3D_NoTex2* verts, const int count)
+{
+   for (int i = 0; i < count; ++i)
+   {
+      const float x = verts[i].x;
+      const float y = verts[i].y;
+      verts[i].x = 1.0f - y;
+      verts[i].y = x;
+   }
+}
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 
 Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncMode, const StereoMode stereo3D)
@@ -96,6 +117,14 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
       m_bloomOff = true;
    }
 
+#if defined(__RK3588__)
+   const int targetWidth = wnd->IsFullScreen() ? wnd->GetPixelWidth() : wnd->GetWidth();
+   const int targetHeight = wnd->IsFullScreen() ? wnd->GetPixelHeight() : wnd->GetHeight();
+#else
+   const int targetWidth = wnd->GetPixelWidth();
+   const int targetHeight = wnd->GetPixelHeight();
+#endif
+
    if (m_stereo3D == STEREO_VR)
    {
       // For VR, renders at the HMD native eye resolution (preview will reuse and scale/stretch it)
@@ -105,20 +134,20 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
    else if (m_stereo3D == STEREO_SBS)
    {
       // Side by side fits the 2 views along the output width, so each view is rendered at half the output width
-      m_renderWidth = wnd->GetPixelWidth() / 2;
-      m_renderHeight = wnd->GetPixelHeight();
+      m_renderWidth = targetWidth / 2;
+      m_renderHeight = targetHeight;
    }
    else if (m_stereo3D == STEREO_TB || m_stereo3D == STEREO_INT || m_stereo3D == STEREO_FLIPPED_INT)
    {
       // Top/Bottom (and interlaced) fits the 2 views along the output height, so each view is rendered at half the output height
-      m_renderWidth = wnd->GetPixelWidth();
-      m_renderHeight = wnd->GetPixelHeight() / 2;
+      m_renderWidth = targetWidth;
+      m_renderHeight = targetHeight / 2;
    }
    else
    {
       // Default renders at the output window pixel resolution
-      m_renderWidth = wnd->GetPixelWidth();
-      m_renderHeight = wnd->GetPixelHeight();
+      m_renderWidth = targetWidth;
+      m_renderHeight = targetHeight;
    }
    const float AAfactor = m_table->m_settings.GetPlayer_AAFactor();
    const int renderWidthAA = (int)((float)m_renderWidth * AAfactor);
@@ -1585,6 +1614,9 @@ void Renderer::RenderStaticPrepass()
    //#define STATIC_PRERENDER_ITERATIONS_KOROBOV 7.0 // for the (commented out) lattice-based QMC oversampling, 'magic factor', depending on the number of iterations!
    // loop for X times and accumulate/average these renderings
    // NOTE: iter == 0 MUST ALWAYS PRODUCE an offset of 0,0!
+#if defined(__RK3588__)
+   m_renderDevice->SetPrerenderMode(true);
+#endif
    int n_iter = IsUsingStaticPrepass() ? (STATIC_PRERENDER_ITERATIONS - 1) : 0;
    for (int iter = n_iter; iter >= 0; --iter) // just do one iteration if in dynamic camera/light/material tweaking mode
    {
@@ -1657,6 +1689,10 @@ void Renderer::RenderStaticPrepass()
 
       m_renderDevice->SubmitRenderFrame(); // Submit to avoid stacking up all prerender passes in a huge render frame
    }
+
+#if defined(__RK3588__)
+   m_renderDevice->SetPrerenderMode(false);
+#endif
 
    if (accumulationSurface)
    {
@@ -3010,6 +3046,10 @@ void Renderer::DrawImage(VPXRenderContext2D* ctx, VPXTexture texture, const floa
       const Matrix3D matRot = Matrix3D::MatrixTranslate(-px, -py, 0.f) * Matrix3D::MatrixRotateZ(rotation * (float)(M_PI / 180.0)) * Matrix3D::MatrixTranslate(px, py, 0.f);
       matRot.TransformPositions(vertices, vertices, 4);
    }
+#if defined(__RK3588__)
+   if (ShouldRotateScoreView(ctx))
+      RotateVertsScoreView90CW(vertices, 4);
+#endif
    rdl->DrawTexturedQuad(rdl->m_basicShader, vertices, true, 0.f);
 }
 
@@ -3053,7 +3093,13 @@ void Renderer::DrawMatrixDisplay(VPXRenderContext2D* ctx, VPXDisplayRenderStyle 
       { vx1, vy1, 0.f, 0.f, 0.f, 1.f, 0.f, 1.f }, //
       { vx2, vy2, 0.f, 0.f, 0.f, 1.f, 1.f, 0.f },  //
       { vx1, vy2, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f } };
-   rdl->DrawTexturedQuad(rdl->m_DMDShader, vertices, true, 0.f);
+   Vertex3D_NoTex2 rotatedVertices[4];
+   memcpy(rotatedVertices, vertices, sizeof(vertices));
+#if defined(__RK3588__)
+   if (ShouldRotateScoreView(ctx))
+      RotateVertsScoreView90CW(rotatedVertices, 4);
+#endif
+   rdl->DrawTexturedQuad(rdl->m_DMDShader, rotatedVertices, true, 0.f);
 }
 
 void Renderer::DrawSegmentDisplay(VPXRenderContext2D* ctx, VPXSegDisplayRenderStyle style, VPXSegDisplayHint shapeHint, VPXTexture glassTex, const float glassTintR, const float glassTintG,
@@ -3088,7 +3134,13 @@ void Renderer::DrawSegmentDisplay(VPXRenderContext2D* ctx, VPXSegDisplayRenderSt
       { vx1, vy1, 0.f, 0.f, 0.f, 1.f, 0.f, 1.f }, //
       { vx2, vy2, 0.f, 0.f, 0.f, 1.f, 1.f, 0.f }, //
       { vx1, vy2, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f } };
-   rdl->DrawTexturedQuad(rdl->m_DMDShader, vertices, true, 0.f);
+   Vertex3D_NoTex2 rotatedVertices[4];
+   memcpy(rotatedVertices, vertices, sizeof(vertices));
+#if defined(__RK3588__)
+   if (ShouldRotateScoreView(ctx))
+      RotateVertsScoreView90CW(rotatedVertices, 4);
+#endif
+   rdl->DrawTexturedQuad(rdl->m_DMDShader, rotatedVertices, true, 0.f);
 }
 
 RenderTarget* Renderer::SetupAncillaryRenderTarget(VPXWindowId window, VPX::RenderOutput& output, RenderTarget* embedRT, int& outputX, int& outputY, int& outputW, int& outputH, bool& isOutputLinear)
@@ -3135,6 +3187,27 @@ RenderTarget* Renderer::SetupAncillaryRenderTarget(VPXWindowId window, VPX::Rend
       outputH = outputRT->GetHeight();
       outputX = 0;
       outputY = 0;
+
+#if defined(__RK3588__)
+      const char* driver = SDL_GetCurrentVideoDriver();
+      if (driver && strcmp(driver, "kmsdrm") == 0 && window != VPXWindowId::VPXWINDOW_Playfield)
+      {
+         const int cfgW = m_table->m_settings.GetWindow_Width(window);
+         const int cfgH = m_table->m_settings.GetWindow_Height(window);
+         const int cfgX = m_table->m_settings.GetWindow_WndX(window);
+         const int cfgY = m_table->m_settings.GetWindow_WndY(window);
+
+         if (cfgW > 0 && cfgH > 0)
+         {
+            outputW = std::min(cfgW, outputRT->GetWidth());
+            outputH = std::min(cfgH, outputRT->GetHeight());
+         }
+         const int maxX = std::max(0, outputRT->GetWidth() - outputW);
+         const int maxY = std::max(0, outputRT->GetHeight() - outputH);
+         outputX = std::max(0, std::min(cfgX, maxX));
+         outputY = std::max(0, std::min(cfgY, maxY));
+      }
+#endif
    }
 #endif
    else
@@ -3209,6 +3282,20 @@ void Renderer::ClearEmbeddedAncillaryWindow(VPXWindowId window, VPX::RenderOutpu
    if (outputRT == nullptr)
       return;
 
+#if defined(__RK3588__)
+   if (window == VPXWindowId::VPXWINDOW_ScoreView)
+   {
+      static int s_scoreViewLogCount = 0;
+      if (s_scoreViewLogCount < 5)
+      {
+         PLOGI << "ScoreView RT=" << outputRT->GetWidth() << "x" << outputRT->GetHeight()
+               << " out=" << m_outputW << "x" << m_outputH
+               << " mode=" << static_cast<int>(output.GetMode());
+         ++s_scoreViewLogCount;
+      }
+   }
+#endif
+
    Vertex3D_NoTex2 vertices[4] = { { 1.f, 1.f, 0.f, 0.f, 0.f, 1.f, 1.f, 1.f }, //
       { 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 1.f }, //
       { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 1.f, 0.f }, //
@@ -3253,6 +3340,14 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, VPX::RenderOutput& outp
       DrawSegmentDisplay,  // Draw a segment display element (just one digit, using max blending to allow building a complete display)
       &isOutputLinear // Custom rendering data (for the time being, just the HDR flag)
    };
+
+#if defined(__RK3588__)
+   if (ShouldRotateScoreView(&context))
+   {
+      std::swap(context.outWidth, context.outHeight);
+      std::swap(context.srcWidth, context.srcHeight);
+   }
+#endif
 
    rd->ResetRenderState();
    if (output.GetMode() == VPX::RenderOutput::OM_WINDOW)

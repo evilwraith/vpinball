@@ -8,6 +8,9 @@
 #endif
 
 #include <thread>
+#if defined(__RK3588__)
+#include <map>
+#endif
 
 #ifdef __LIBVPINBALL__
 #ifdef __APPLE__
@@ -27,11 +30,64 @@
 #include "renderer/AreaTex.h"
 #include "renderer/SearchTex.h"
 
+#if defined(__RK3588__)
+#include <gbm.h>
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+// KMS DRM State Management for BGFX/SDL Interop
+struct KMSWindowState {
+   void* last_surf = nullptr;
+   struct gbm_bo* prev_bo = nullptr;
+   int bo_null_count = 0;
+   int error_count = 0;
+   uint32_t connector_id = 0;
+};
+static std::map<RenderDevice*, std::map<VPX::Window*, KMSWindowState>> s_rd_kms_states;
+
+static uint32_t FindConnectorForCrtc(const int drm_fd, const uint32_t crtc_id)
+{
+   drmModeRes* resources = drmModeGetResources(drm_fd);
+   if (!resources)
+      return 0;
+   uint32_t found = 0;
+   for (int i = 0; i < resources->count_connectors && found == 0; ++i)
+   {
+      drmModeConnector* connector = drmModeGetConnector(drm_fd, resources->connectors[i]);
+      if (!connector)
+         continue;
+      if (connector->connection == DRM_MODE_CONNECTED && connector->count_encoders > 0)
+      {
+         for (int e = 0; e < connector->count_encoders; ++e)
+         {
+            drmModeEncoder* encoder = drmModeGetEncoder(drm_fd, connector->encoders[e]);
+            if (encoder)
+            {
+               if (encoder->crtc_id == crtc_id)
+               {
+                  found = connector->connector_id;
+                  drmModeFreeEncoder(encoder);
+                  break;
+               }
+               drmModeFreeEncoder(encoder);
+            }
+         }
+      }
+      drmModeFreeConnector(connector);
+   }
+   drmModeFreeResources(resources);
+   return found;
+}
+#endif
+
 #if defined(ENABLE_BGFX)
 #ifdef __STANDALONE__
 #pragma push_macro("_WIN64")
 #undef _WIN64
 #endif
+#include <SDL3/SDL_vulkan.h>
 #include "bx/platform.h"
 #include "bx/string.h"
 #include "bgfx/platform.h"
@@ -813,6 +869,25 @@ RenderDevice::RenderDevice(
    if (init.type == bgfx::RendererType::Direct3D12)
       init.type = bgfx::RendererType::Count;
    #endif
+#if BX_PLATFORM_RK3588
+   const char* sdlDriver = SDL_GetCurrentVideoDriver();
+   const bool isKmsdrm = sdlDriver && strcmp(sdlDriver, "kmsdrm") == 0;
+   if (isKmsdrm && (init.type == bgfx::RendererType::Vulkan || init.type == bgfx::RendererType::Count))
+   {
+      const char* allowVulkan = std::getenv("VPX_KMSDRM_ALLOW_VULKAN");
+      if (!allowVulkan || strcmp(allowVulkan, "1") != 0)
+      {
+         PLOGW << "KMSDRM detected: Vulkan backend is not supported. Falling back to OpenGLES. Set VPX_KMSDRM_ALLOW_VULKAN=1 to force Vulkan.";
+         init.type = bgfx::RendererType::OpenGLES;
+      }
+      else
+      {
+         setenv("VPX_KMSDRM_VULKAN_DISPLAY", "1", 1);
+         init.type = bgfx::RendererType::Vulkan;
+         PLOGI << "KMSDRM detected: Vulkan backend forced. Enabling VK_KHR_display surface path.";
+      }
+   }
+#endif
    PLOGI << "Using graphics backend: " << bgfxRendererNames[init.type] << " (available: " << supportedRendererLog << ')';
 
    #ifndef __LIBVPINBALL__
@@ -843,6 +918,22 @@ RenderDevice::RenderDevice(
 
    init.resolution.width = wnd->GetPixelWidth();
    init.resolution.height = wnd->GetPixelHeight();
+#if BX_PLATFORM_RK3588
+   // ALP4K Adjustment: force the BGFX resolution to match the Window's requested resolution
+   if (wnd->IsFullScreen())
+   {
+      if (init.resolution.width != wnd->GetWidth() || init.resolution.height != wnd->GetHeight()) {
+         PLOGW << "RenderDevice::Init: Adjusting BGFX resolution to Window attributes: " << wnd->GetWidth() << "x" << wnd->GetHeight();
+         init.resolution.width = wnd->GetWidth();
+         init.resolution.height = wnd->GetHeight();
+      }
+   }
+   else
+   {
+      init.resolution.width = wnd->GetWidth();
+      init.resolution.height = wnd->GetHeight();
+   }
+#endif
    switch (wnd->GetBitDepth())
    {
    case 32: init.resolution.formatColor = bgfx::TextureFormat::RGBA8; break;
@@ -854,6 +945,7 @@ RenderDevice::RenderDevice(
    init.platformData.backBuffer = nullptr;
    init.platformData.backBufferDS = nullptr;
    #if BX_PLATFORM_LINUX || BX_PLATFORM_BSD
+   PLOGI << "SDL video driver: " << SDL_GetCurrentVideoDriver();
    if (SDL_GetCurrentVideoDriver() == "x11"s) {
       init.platformData.ndt = SDL_GetPointerProperty(SDL_GetWindowProperties(m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
       init.platformData.nwh = (void*)SDL_GetNumberProperty(SDL_GetWindowProperties(m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
@@ -863,6 +955,22 @@ RenderDevice::RenderDevice(
       init.platformData.ndt = SDL_GetPointerProperty(SDL_GetWindowProperties(m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, NULL);
       init.platformData.nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, NULL);
    }
+#if BX_PLATFORM_RK3588
+   else if (SDL_GetCurrentVideoDriver() == "kmsdrm"s) {
+      SDL_PropertiesID props = SDL_GetWindowProperties(m_outputWnd[0]->GetCore());
+      SDL_EnumerateProperties(props, [](void*, SDL_PropertiesID, const char* name) {
+         PLOGI << "Window Property: " << name;
+      }, nullptr);
+      init.platformData.ndt = SDL_GetPointerProperty(props, "SDL.window.kmsdrm.gbm_dev", NULL);
+      init.platformData.nwh = SDL_GetPointerProperty(props, "SDL.window.kmsdrm.gbm_surface", NULL);
+      PLOGI << "KMSDRM GBM handles: ndt=" << init.platformData.ndt << " nwh=" << init.platformData.nwh;
+      if (!init.platformData.ndt || !init.platformData.nwh)
+      {
+         PLOGW << "KMSDRM GBM handles missing; BGFX init may fail. SDL error: " << SDL_GetError();
+      }
+      setenv("BGFX_USE_GBM", "1", 1);
+   }
+#endif
    #elif BX_PLATFORM_OSX
    init.platformData.nwh = SDL_GetRenderMetalLayer(SDL_CreateRenderer(m_outputWnd[0]->GetCore(), "Metal"));
    #elif BX_PLATFORM_IOS
@@ -886,7 +994,85 @@ RenderDevice::RenderDevice(
    m_renderThread = std::thread(&RenderThread, this, init);
    m_frameReadySem.wait();
    m_frameMutex.lock();
+   {
+      static bool s_loggedVulkanInfo = false;
+      if (!s_loggedVulkanInfo && bgfx::getRendererType() == bgfx::RendererType::Vulkan)
+      {
+         s_loggedVulkanInfo = true;
+         const char* sdlDriver = SDL_GetCurrentVideoDriver();
+         PLOGI << "Video driver: " << (sdlDriver ? sdlDriver : "(null)");
+
+         if (const bgfx::Caps* caps = bgfx::getCaps())
+         {
+            PLOGI << "BGFX caps: renderer=Vulkan vendorId=0x" << std::hex << caps->vendorId
+                  << " deviceId=0x" << caps->deviceId << std::dec
+                  << " homogeneousDepth=" << (caps->homogeneousDepth ? "1" : "0")
+                  << " originBottomLeft=" << (caps->originBottomLeft ? "1" : "0")
+                  << " supported=0x" << std::hex << caps->supported << std::dec;
+            PLOGI << "BGFX limits: maxDrawCalls=" << caps->limits.maxDrawCalls
+                  << " maxViews=" << caps->limits.maxViews
+                  << " maxTextureSize=" << caps->limits.maxTextureSize
+                  << " maxFrameBuffers=" << caps->limits.maxFrameBuffers;
+         }
+
+         if (SDL_Vulkan_LoadLibrary(nullptr))
+         {
+            SDL_FunctionPointer getProc = SDL_Vulkan_GetVkGetInstanceProcAddr();
+            if (getProc)
+            {
+               using VkInstance = void*;
+               using VkResult = int32_t;
+               using PFN_vkGetInstanceProcAddr = void* (*)(VkInstance, const char*);
+               using PFN_vkEnumerateInstanceVersion = VkResult (*)(uint32_t*);
+
+               const auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(getProc);
+               const auto vkEnumerateInstanceVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
+               if (vkEnumerateInstanceVersion)
+               {
+                  uint32_t version = 0;
+                  if (vkEnumerateInstanceVersion(&version) == 0)
+                  {
+                     const uint32_t major = (version >> 22) & 0x3ff;
+                     const uint32_t minor = (version >> 12) & 0x3ff;
+                     const uint32_t patch = version & 0xfff;
+                     PLOGI << "Vulkan instance version: " << major << "." << minor << "." << patch;
+                  }
+                  else
+                  {
+                     PLOGW << "Vulkan instance version: query failed";
+                  }
+               }
+               else
+               {
+                  PLOGW << "Vulkan instance version: vkEnumerateInstanceVersion not available";
+               }
+            }
+
+            Uint32 extCount = 0;
+            const char* const* exts = SDL_Vulkan_GetInstanceExtensions(&extCount);
+            if (exts && extCount > 0)
+            {
+               std::string extList;
+               for (Uint32 i = 0; i < extCount; ++i)
+               {
+                  if (i != 0) extList += ", ";
+                  extList += exts[i];
+               }
+               PLOGI << "Vulkan instance extensions (SDL): " << extList;
+            }
+            else
+            {
+               PLOGW << "Vulkan instance extensions (SDL): none";
+            }
+         }
+         else
+         {
+            PLOGW << "Vulkan loader not available: " << SDL_GetError();
+         }
+      }
+   }
    PLOGI << "BGFX initialized using " << bgfxRendererNames[bgfx::getRendererType()] << " backend";
+   PLOGI << "BGFX Init Resolution: " << init.resolution.width << "x" << init.resolution.height;
 
 #elif defined(ENABLE_OPENGL)
    ///////////////////////////////////
@@ -1675,6 +1861,204 @@ void RenderDevice::Flip()
       }
    }
    SubmitAndFlipFrame();
+
+#if defined(__RK3588__)
+   if (SDL_GetCurrentVideoDriver() == "kmsdrm"s)
+   {
+      for (size_t i = 0; i < m_outputWnd.size(); ++i)
+      {
+         VPX::Window* wnd = m_outputWnd[i];
+         SDL_PropertiesID props = SDL_GetWindowProperties(wnd->GetCore());
+
+         int drm_fd = (int)SDL_GetNumberProperty(props, "SDL.window.kmsdrm.drm_fd", -1);
+         uint32_t crtc_id = (uint32_t)SDL_GetNumberProperty(props, "SDL.window.kmsdrm.crtc_id", 0);
+         gbm_surface* surf = (gbm_surface*)SDL_GetPointerProperty(props, "SDL.window.kmsdrm.gbm_surface", NULL);
+         uint32_t connector_id = (uint32_t)SDL_GetNumberProperty(props, "SDL.window.kmsdrm.connector_id", 0);
+
+         if (drm_fd < 0 || !surf)
+            continue;
+
+         KMSWindowState& state = s_rd_kms_states[this][wnd];
+         if (connector_id == 0)
+         {
+            if (state.connector_id == 0 && drm_fd >= 0 && crtc_id != 0)
+            {
+               state.connector_id = FindConnectorForCrtc(drm_fd, crtc_id);
+               if (state.connector_id != 0)
+                  PLOGI << "RenderDevice::Flip: KMSDRM Window " << i << " resolved connector " << state.connector_id << " for CRTC " << crtc_id;
+            }
+            connector_id = state.connector_id;
+         }
+
+         static int logged_kms_info = 0;
+         if (logged_kms_info < (int)m_outputWnd.size())
+         {
+            PLOGI << "RenderDevice::Flip: KMSDRM Window " << i << ": FD=" << drm_fd << " CRTC=" << crtc_id << " Conn=" << connector_id << " Surf=" << surf;
+            logged_kms_info++;
+         }
+
+         if (surf != state.last_surf)
+         {
+            if (i == 0 && state.last_surf != nullptr)
+            {
+               PLOGI << "RenderDevice::Flip: Primary Surface changed. Updating BGFX Platform Data. Old=" << state.last_surf << " New=" << surf;
+               bgfx::PlatformData pd;
+               memset(&pd, 0, sizeof(pd));
+               pd.ndt = (void*)SDL_GetPointerProperty(props, "SDL.window.kmsdrm.gbm_dev", NULL);
+               pd.nwh = surf;
+               bgfx::setPlatformData(pd);
+            }
+
+            state.last_surf = surf;
+            state.prev_bo = nullptr;
+         }
+
+         struct gbm_bo* bo = nullptr;
+
+         int max_attempts = (i == 0) ? 32 : 10;
+
+         for (int attempt = 0; attempt < max_attempts; attempt++)
+         {
+            bo = gbm_surface_lock_front_buffer(surf);
+            if (bo)
+               break;
+            usleep(1000);
+         }
+
+         if (!bo)
+         {
+            state.bo_null_count++;
+            if (i != 0 && (state.bo_null_count % 50) == 0)
+               PLOGW << "RenderDevice::Flip: Window " << i << " lock timeout. Count=" << state.bo_null_count;
+            if ((state.bo_null_count % 100) == 0)
+            {
+               if (i == 0 || state.bo_null_count % 1000 == 0)
+                  PLOGW << "RenderDevice::Flip: Window " << i << " lock timeout. Count=" << state.bo_null_count << ". Releasing prev_bo to unblock producer.";
+            }
+
+            if (state.prev_bo)
+            {
+               gbm_surface_release_buffer(surf, state.prev_bo);
+               state.prev_bo = nullptr;
+            }
+            continue;
+         }
+
+         if (state.bo_null_count > 0)
+         {
+            PLOGI << "RenderDevice::Flip: Window " << i << " recovered from starvation after " << state.bo_null_count << " failures.";
+         }
+         state.bo_null_count = 0;
+
+         if (m_isPrerendering)
+         {
+            gbm_surface_release_buffer(surf, bo);
+            continue;
+         }
+
+         if (i == 0)
+         {
+            static int success_log = 0;
+            if (success_log++ < 5)
+               PLOGI << "RenderDevice::Flip: Window 0 SUCCESS acquiring buffer " << bo << " FB ID: " << gbm_bo_get_user_data(bo);
+         }
+         else
+         {
+            static int aux_success_log = 0;
+            if (aux_success_log++ < 5)
+               PLOGI << "RenderDevice::Flip: Window " << i << " SUCCESS acquiring buffer " << bo << " FB ID: " << gbm_bo_get_user_data(bo);
+         }
+
+         uint32_t fb_id = 0;
+         void* ud = gbm_bo_get_user_data(bo);
+         if (ud)
+         {
+            fb_id = (uint32_t)(uintptr_t)ud;
+         }
+         else
+         {
+            uint32_t width = gbm_bo_get_width(bo);
+            uint32_t height = gbm_bo_get_height(bo);
+            uint32_t stride = gbm_bo_get_stride(bo);
+            uint32_t handle = gbm_bo_get_handle(bo).u32;
+
+            if (drmModeAddFB(drm_fd, width, height, 24, 32, stride, handle, &fb_id) == 0)
+            {
+               gbm_bo_set_user_data(bo, (void*)(uintptr_t)fb_id, nullptr);
+            }
+            else
+            {
+               PLOGE << "RenderDevice::Flip: Window " << i << " drmModeAddFB failed";
+            }
+         }
+
+         int ret = -1;
+         if (fb_id)
+         {
+            if (i != 0 && state.prev_bo == nullptr && connector_id != 0)
+            {
+               drmModeCrtc* crtc = drmModeGetCrtc(drm_fd, crtc_id);
+               if (crtc)
+               {
+                  ret = drmModeSetCrtc(drm_fd, crtc_id, fb_id, 0, 0, &connector_id, 1, &crtc->mode);
+                  drmModeFreeCrtc(crtc);
+                  if (ret == 0)
+                  {
+                     PLOGI << "RenderDevice::Flip: Window " << i << " initial modeset OK. CRTC=" << crtc_id << " Conn=" << connector_id << " FB=" << fb_id;
+                  }
+                  if (ret != 0 && state.error_count < 100)
+                  {
+                     PLOGE << "drmModeSetCrtc failed Window " << i << ": " << strerror(-ret) << " (" << ret << ") FB: " << fb_id << " CRTC: " << crtc_id << " Conn: " << connector_id;
+                     state.error_count++;
+                  }
+               }
+            }
+            if (ret == 0)
+            {
+            }
+            else
+            {
+               for (int busy_retries = 0; busy_retries < 20; busy_retries++)
+               {
+                  ret = drmModePageFlip(drm_fd, crtc_id, fb_id, 0, nullptr);
+                  if (ret == -EBUSY)
+                     usleep(1000);
+                  else
+                     break;
+               }
+            }
+
+            if (ret != 0)
+            {
+               if (state.error_count < 100)
+               {
+                  PLOGE << "drmModePageFlip failed Window " << i << ": " << strerror(-ret) << " (" << ret << ") FB: " << fb_id << " CRTC: " << crtc_id << " Conn: " << connector_id;
+                  state.error_count++;
+               }
+            }
+         }
+         else
+         {
+            gbm_surface_release_buffer(surf, bo);
+            bo = nullptr;
+         }
+
+         if (bo && fb_id)
+         {
+            if (ret == 0)
+            {
+               if (state.prev_bo && state.prev_bo != bo)
+                  gbm_surface_release_buffer(surf, state.prev_bo);
+               state.prev_bo = bo;
+            }
+            else
+            {
+               gbm_surface_release_buffer(surf, bo);
+            }
+         }
+      }
+   }
+#endif
 
    #elif defined(ENABLE_OPENGL)
    SDL_GL_SwapWindow(m_outputWnd[0]->GetCore());

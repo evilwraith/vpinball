@@ -18,6 +18,9 @@
 #include "Window.h"
 
 #include <SDL3/SDL.h>
+#if defined(__RK3588__)
+#include <atomic>
+#endif
 
 #if defined(ENABLE_BGFX)
 #include <thread>
@@ -220,6 +223,10 @@ public:
    int GetVisualLatencyCorrection() const { return m_visualLatencyCorrection; }
    void SetVisualLatencyCorrection(int latencyMs) { m_visualLatencyCorrection = latencyMs; }
 
+#if defined(__RK3588__)
+   void SetPrerenderMode(bool active) { m_isPrerendering = active; }
+#endif
+
 private:
    const bool m_isVR;
 
@@ -249,6 +256,10 @@ private:
    vector<VPX::Window*> m_screenshotWindow;
    vector<std::filesystem::path> m_screenshotFilename;
    std::function<void(bool)> m_screenshotCallback = [](bool) { };
+
+#if defined(__RK3588__)
+   std::atomic<bool> m_isPrerendering{false};
+#endif
 
 #if defined(ENABLE_BGFX)
 public:
