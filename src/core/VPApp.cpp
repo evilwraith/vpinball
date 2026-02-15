@@ -15,7 +15,7 @@
 #include "utils/BlackBox.h"
 #endif
 
-#include "ui/resource.h"
+#include "ui/win/resource.h"
 #include <initguid.h>
 
 #define SET_CRT_DEBUG_FIELD(a) _CrtSetDbgFlag((a) | _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
@@ -277,11 +277,11 @@ void VPApp::InitInstance()
       std::filesystem::path defaultPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences) / "VPinballX.ini";
       std::filesystem::path appPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Root) / "VPinballX.ini";
       if (FileExists(defaultPath))
-         m_iniFileName = defaultPath.string();
+         m_iniFileName = defaultPath;
       else if (FileExists(appPath))
-         m_iniFileName = appPath.string();
+         m_iniFileName = appPath;
       else
-         m_iniFileName = defaultPath.string();
+         m_iniFileName = defaultPath;
    }
    m_settings.SetIniPath(m_iniFileName);
    m_settings.Load(true);
