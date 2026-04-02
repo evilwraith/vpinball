@@ -45,7 +45,6 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
       -DSDL_SHARED=ON \
       -DSDL_STATIC=OFF \
       -DSDL_TEST_LIBRARY=OFF \
-      -DSDL_X11=ON \
       -DSDL_KMSDRM=ON \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
@@ -137,14 +136,19 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
    mkdir bgfx
    cd bgfx
 
-   curl -sL https://github.com/bkaradzic/bgfx.cmake/releases/download/v${BGFX_CMAKE_VERSION}/bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz -o bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
-   tar xzf bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
-   curl -sL https://github.com/vbousquet/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
-   tar xzf bgfx-${BGFX_PATCH_SHA}.tar.gz
+#   curl -sL https://github.com/bkaradzic/bgfx.cmake/releases/download/v${BGFX_CMAKE_VERSION}/bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz -o bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
+#   tar xzf bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
+#   curl -sL https://github.com/vbousquet/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
+#   tar xzf bgfx-${BGFX_PATCH_SHA}.tar.gz
+   cp -r /workspaces/vpinball-main/transfer/bgfx.cmake bgfx.cmake
    cd bgfx.cmake
    rm -rf bgfx
-   mv ../bgfx-${BGFX_PATCH_SHA} bgfx
+   rm -rf bx
+#   mv ../bgfx-${BGFX_PATCH_SHA} bgfx
+   cp -r /workspaces/vpinball-main/transfer/bgfx bgfx
+   cp -r /workspaces/vpinball-main/transfer/bx bx
    cmake -S. \
+      -DBUILD_RK3588=ON \
       -DBGFX_LIBRARY_TYPE=SHARED \
       -DBGFX_BUILD_TOOLS=OFF \
       -DBGFX_BUILD_EXAMPLES=OFF \
