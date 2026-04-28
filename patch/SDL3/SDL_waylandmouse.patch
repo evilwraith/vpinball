@@ -1,0 +1,13 @@
+--- SDL/src/video/wayland/SDL_waylandmouse.c
++++ SDL/src/video/wayland/SDL_waylandmouse.c
+@@ -1034,6 +1034,10 @@
+     int hot_x;
+     int hot_y;
+ 
++    if (!obj || (obj->is_pointer && !obj->wl_pointer) || (!obj->is_pointer && !obj->wl_tool)) {
++        return;
++    }
++
+     // Stop the frame callback for old animated cursors.
+     if (cursor_data != state->current_cursor) {
+         Wayland_CursorStateDestroyFrameCallback(state);
