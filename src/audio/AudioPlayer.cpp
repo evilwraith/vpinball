@@ -9,7 +9,16 @@
 
 #define MA_ENABLE_ONLY_SPECIFIC_BACKENDS
 #define MA_ENABLE_CUSTOM
+#if defined(__forceinline)
+#pragma push_macro("__forceinline")
+#undef __forceinline
+#define VPX_RESTORE_FORCEINLINE_MACRO
+#endif
 #include "miniaudio/extras/stb_vorbis.c"
+#if defined(VPX_RESTORE_FORCEINLINE_MACRO)
+#pragma pop_macro("__forceinline")
+#undef VPX_RESTORE_FORCEINLINE_MACRO
+#endif
 #include "miniaudio/miniaudio.h"
 #include "miniaudio/miniaudio.c"
 
@@ -22,6 +31,182 @@ struct ma_device_ex
    SDL_AudioStream* stream;
    vector<uint8_t> buffer;
 };
+
+static void LogSDLAudioPlaybackDevices(const char* context, SDL_AudioDeviceID* pAudioList, int count)
+{
+   const char* currentDriver = SDL_GetCurrentAudioDriver();
+   const int numDrivers = SDL_GetNumAudioDrivers();
+   PLOGI << "SDL audio enumeration (" << context << "). Current driver: '"
+      << (currentDriver ? currentDriver : "<none>") << "', compiled drivers: " << numDrivers;
+
+   for (int i = 0; i < numDrivers; ++i)
+   {
+      const char* driverName = SDL_GetAudioDriver(i);
+      if (driverName)
+         PLOGI << "SDL audio driver[" << i << "]: '" << driverName << "'";
+   }
+
+   if (pAudioList == nullptr)
+   {
+      PLOGE << "SDL_GetAudioPlaybackDevices failed during " << context << " (Error: " << SDL_GetError() << ')';
+      return;
+   }
+
+   if (count == 0)
+      PLOGI << "SDL reported no playback devices during " << context;
+
+   for (int i = 0; i < count; ++i)
+   {
+      SDL_AudioSpec spec {};
+      int frames = 0;
+      const bool hasFormat = SDL_GetAudioDeviceFormat(pAudioList[i], &spec, &frames);
+      const char* name = SDL_GetAudioDeviceName(pAudioList[i]);
+      PLOGI << "SDL playback device[" << i
+         << "]: id=" << pAudioList[i]
+         << ", name='" << (name ? name : "<null>")
+         << "', physical=" << (SDL_IsAudioDevicePhysical(pAudioList[i]) ? "true" : "false")
+         << ", playback=" << (SDL_IsAudioDevicePlayback(pAudioList[i]) ? "true" : "false")
+         << ", channels=" << (hasFormat ? static_cast<int>(spec.channels) : -1)
+         << ", freq=" << (hasFormat ? spec.freq : -1)
+         << ", format='" << (hasFormat ? SDL_GetAudioFormatName(spec.format) : "<unknown>")
+         << "', frames=" << (hasFormat ? frames : -1);
+   }
+}
+
+static void LogSDLAudioHints(const char* context)
+{
+   const char* sdlDriverHint = SDL_GetHint(SDL_HINT_AUDIO_DRIVER);
+   const char* sdlChannelsHint = SDL_GetHint(SDL_HINT_AUDIO_CHANNELS);
+   const char* sdlFrequencyHint = SDL_GetHint(SDL_HINT_AUDIO_FREQUENCY);
+   const char* sdlFormatHint = SDL_GetHint(SDL_HINT_AUDIO_FORMAT);
+   const char* sdlDefaultPlaybackHint = SDL_GetHint(SDL_HINT_AUDIO_ALSA_DEFAULT_PLAYBACK_DEVICE);
+
+   const char* envDriverHint = SDL_getenv("SDL_AUDIO_DRIVER");
+   const char* envChannelsHint = SDL_getenv("SDL_AUDIO_CHANNELS");
+   const char* envFrequencyHint = SDL_getenv("SDL_AUDIO_FREQUENCY");
+   const char* envFormatHint = SDL_getenv("SDL_AUDIO_FORMAT");
+   const char* envDefaultPlaybackHint = SDL_getenv("SDL_AUDIO_ALSA_DEFAULT_PLAYBACK_DEVICE");
+
+   PLOGI << "SDL audio hints (" << context << "):"
+      << " hint_driver='" << (sdlDriverHint ? sdlDriverHint : "<unset>")
+      << "', hint_channels='" << (sdlChannelsHint ? sdlChannelsHint : "<unset>")
+      << "', hint_frequency='" << (sdlFrequencyHint ? sdlFrequencyHint : "<unset>")
+      << "', hint_format='" << (sdlFormatHint ? sdlFormatHint : "<unset>")
+      << "', hint_alsa_default_playback='" << (sdlDefaultPlaybackHint ? sdlDefaultPlaybackHint : "<unset>")
+      << "', env_driver='" << (envDriverHint ? envDriverHint : "<unset>")
+      << "', env_channels='" << (envChannelsHint ? envChannelsHint : "<unset>")
+      << "', env_frequency='" << (envFrequencyHint ? envFrequencyHint : "<unset>")
+      << "', env_format='" << (envFormatHint ? envFormatHint : "<unset>")
+      << "', env_alsa_default_playback='" << (envDefaultPlaybackHint ? envDefaultPlaybackHint : "<unset>") << "'";
+}
+
+static SDL_AudioFormat ParseRequestedSDLAudioFormat()
+{
+   const char* formatHint = SDL_GetHint(SDL_HINT_AUDIO_FORMAT);
+   if (formatHint == nullptr)
+      return SDL_AUDIO_UNKNOWN;
+
+   if (strcmp(formatHint, "U8") == 0)
+      return SDL_AUDIO_U8;
+   if (strcmp(formatHint, "S8") == 0)
+      return SDL_AUDIO_S8;
+   if (strcmp(formatHint, "S16LE") == 0 || strcmp(formatHint, "S16") == 0)
+      return SDL_AUDIO_S16LE;
+   if (strcmp(formatHint, "S16BE") == 0)
+      return SDL_AUDIO_S16BE;
+   if (strcmp(formatHint, "S32LE") == 0 || strcmp(formatHint, "S32") == 0)
+      return SDL_AUDIO_S32LE;
+   if (strcmp(formatHint, "S32BE") == 0)
+      return SDL_AUDIO_S32BE;
+   if (strcmp(formatHint, "F32LE") == 0 || strcmp(formatHint, "F32") == 0)
+      return SDL_AUDIO_F32LE;
+   if (strcmp(formatHint, "F32BE") == 0)
+      return SDL_AUDIO_F32BE;
+
+   PLOGW << "Ignoring unsupported SDL_AUDIO_FORMAT hint value '" << formatHint << "'";
+   return SDL_AUDIO_UNKNOWN;
+}
+
+static SDL_AudioFormat ToSDLAudioFormat(ma_format format)
+{
+   switch (format)
+   {
+      case ma_format_u8: return SDL_AUDIO_U8;
+      case ma_format_s16: return SDL_AUDIO_S16;
+      case ma_format_s32: return SDL_AUDIO_S32;
+      case ma_format_f32: return SDL_AUDIO_F32;
+      default: return SDL_AUDIO_UNKNOWN;
+   }
+}
+
+static bool BuildRequestedSDLAudioSpec(const ma_device_config* pConfig, SDL_AudioSpec& requestedSpec)
+{
+   SDL_zero(requestedSpec);
+   bool hasOverride = false;
+
+   if (const char* freqHint = SDL_GetHint(SDL_HINT_AUDIO_FREQUENCY); freqHint != nullptr)
+   {
+      const int value = SDL_atoi(freqHint);
+      if (value > 0)
+      {
+         requestedSpec.freq = value;
+         hasOverride = true;
+      }
+   }
+
+   if (const char* channelsHint = SDL_GetHint(SDL_HINT_AUDIO_CHANNELS); channelsHint != nullptr)
+   {
+      const int value = SDL_atoi(channelsHint);
+      if (value > 0 && value <= UINT8_MAX)
+      {
+         requestedSpec.channels = static_cast<Uint8>(value);
+         hasOverride = true;
+      }
+      else if (value > UINT8_MAX)
+      {
+         PLOGW << "Ignoring SDL_AUDIO_CHANNELS hint value '" << channelsHint << "' because it exceeds Uint8 range";
+      }
+   }
+
+   const SDL_AudioFormat requestedFormat = ParseRequestedSDLAudioFormat();
+   if (requestedFormat != SDL_AUDIO_UNKNOWN)
+   {
+      requestedSpec.format = requestedFormat;
+      hasOverride = true;
+   }
+
+   if (!hasOverride)
+      return false;
+
+   if (requestedSpec.freq <= 0)
+   {
+      if (pConfig && pConfig->sampleRate > 0)
+         requestedSpec.freq = static_cast<int>(pConfig->sampleRate);
+      else
+         requestedSpec.freq = 44100;
+   }
+
+   if (requestedSpec.channels == 0)
+   {
+      if (pConfig && pConfig->playback.channels > 0 && pConfig->playback.channels <= UINT8_MAX)
+         requestedSpec.channels = static_cast<Uint8>(pConfig->playback.channels);
+      else
+         requestedSpec.channels = 2;
+   }
+
+   if (requestedSpec.format == SDL_AUDIO_UNKNOWN)
+   {
+      requestedSpec.format = pConfig ? ToSDLAudioFormat(pConfig->playback.format) : SDL_AUDIO_UNKNOWN;
+      if (requestedSpec.format == SDL_AUDIO_UNKNOWN)
+         requestedSpec.format = SDL_AUDIO_F32;
+   }
+
+   PLOGI << "Requesting SDL audio override: freq=" << requestedSpec.freq
+      << ", channels=" << static_cast<int>(requestedSpec.channels)
+      << ", format='" << SDL_GetAudioFormatName(requestedSpec.format) << "'";
+
+   return true;
+}
 
 static ma_result ma_context_enumerate_devices__sdl(ma_context* pContext, ma_enum_devices_callback_proc callback, void* pUserData)
 {
@@ -105,11 +290,16 @@ static ma_result ma_device_init__sdl(ma_device* pDevice, const ma_device_config*
 
    auto pDeviceEx = reinterpret_cast<ma_device_ex*>(pDevice);
 
+   LogSDLAudioHints("ma_device_init__sdl");
+
    auto requestedDeviceId = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
    if (pConfig->playback.pDeviceID)
       requestedDeviceId = pConfig->playback.pDeviceID->custom.i;
 
-   pDeviceEx->stream = SDL_OpenAudioDeviceStream(requestedDeviceId, nullptr, ma_audio_callback_playback__sdl, pDeviceEx);
+   SDL_AudioSpec requestedSpec {};
+   const SDL_AudioSpec* pRequestedSpec = BuildRequestedSDLAudioSpec(pConfig, requestedSpec) ? &requestedSpec : nullptr;
+
+   pDeviceEx->stream = SDL_OpenAudioDeviceStream(requestedDeviceId, pRequestedSpec, ma_audio_callback_playback__sdl, pDeviceEx);
    if (pDeviceEx->stream == nullptr)
    {
       PLOGE << "Failed to open SDL audio device (Error: " << SDL_GetError() << ')';
@@ -203,15 +393,26 @@ static ma_result ma_context_init__sdl(ma_context* pContext, const ma_context_con
 namespace VPX
 {
 
-AudioPlayer::AudioPlayer(const string& backglassDevice, const string& playfieldDevice, SoundConfigTypes playfieldSoundMode)
+AudioPlayer::AudioPlayer(const string& backglassDevice, const string& playfieldDevice, SoundConfigTypes playfieldSoundMode, const string& playfieldAlsaDefaultPlaybackDevice)
    : m_soundMode3D(playfieldSoundMode)
 {
+   if (playfieldAlsaDefaultPlaybackDevice.empty())
+      SDL_ResetHint(SDL_HINT_AUDIO_ALSA_DEFAULT_PLAYBACK_DEVICE);
+   else
+      SDL_SetHint(SDL_HINT_AUDIO_ALSA_DEFAULT_PLAYBACK_DEVICE, playfieldAlsaDefaultPlaybackDevice.c_str());
+
    if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
       return;
 
    {
       int count;
       SDL_AudioDeviceID* pAudioList = SDL_GetAudioPlaybackDevices(&count);
+      LogSDLAudioPlaybackDevices("AudioPlayer ctor", pAudioList, count);
+      if (pAudioList == nullptr)
+      {
+         PLOGE << "Falling back to default audio devices because SDL playback device enumeration failed in AudioPlayer ctor";
+         count = 0;
+      }
       for (int i = 0; i < count; ++i)
       { // We identify by name as this is the only stable property (see https://github.com/libsdl-org/SDL/issues/12278)
          string name = SDL_GetAudioDeviceName(pAudioList[i]);
@@ -365,6 +566,11 @@ AudioPlayer::AudioStreamID AudioPlayer::OpenAudioStream(const string& name, int 
       SDL_AudioSpec deviceSpec;
       const bool hasDeviceSpec = SDL_GetAudioDeviceFormat(m_backglassAudioDevice, &deviceSpec, nullptr);
       m_backglassSDLDevice = SDL_OpenAudioDevice(m_backglassAudioDevice, hasDeviceSpec ? & deviceSpec : nullptr);
+      if (m_backglassSDLDevice == 0)
+      {
+         PLOGE << "Failed to open SDL backglass audio device for stream playback (Error: " << SDL_GetError() << ')';
+         return nullptr;
+      }
    }
    std::unique_ptr<AudioStreamPlayer> audioStream = AudioStreamPlayer::Create(m_backglassSDLDevice, frequency, channels, isFloat);
    if (audioStream == nullptr)
@@ -531,7 +737,13 @@ vector<AudioPlayer::AudioDevice> AudioPlayer::EnumerateAudioDevices()
    }
    int count;
    auto pAudioList = SDL_GetAudioPlaybackDevices(&count);
+   LogSDLAudioPlaybackDevices("AudioPlayer::EnumerateAudioDevices", pAudioList, count);
    vector<AudioDevice> audioDevices;
+   if (pAudioList == nullptr)
+   {
+      SDL_QuitSubSystem(SDL_INIT_AUDIO);
+      return audioDevices;
+   }
    for (int i = 0; i < count; ++i)
    {
       SDL_AudioSpec spec;
@@ -539,6 +751,7 @@ vector<AudioPlayer::AudioDevice> AudioPlayer::EnumerateAudioDevices()
       const AudioDevice audioDevice = { SDL_GetAudioDeviceName(pAudioList[i]), static_cast<unsigned int>(spec.channels) };
       audioDevices.push_back(audioDevice);
    }
+   SDL_free(pAudioList);
    SDL_QuitSubSystem(SDL_INIT_AUDIO);
    return audioDevices;
 }

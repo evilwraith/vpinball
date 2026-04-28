@@ -97,8 +97,8 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    , m_topperOutput(VPXWindowId::VPXWINDOW_Topper)
    , m_pininput(this)
    , m_audioPlayer(std::make_unique<VPX::AudioPlayer>(
-        table->m_settings.GetPlayer_SoundDeviceBG(), table->m_settings.GetPlayer_SoundDevice(), static_cast<VPX::SoundConfigTypes>(table->m_settings.GetPlayer_Sound3D())))
-   , m_resURIResolver(m_pluginManager.GetMsgAPI(), m_pluginAPI.GetVPXEndPointId(), true, true, true, true)
+         table->m_settings.GetPlayer_SoundDeviceBG(), table->m_settings.GetPlayer_SoundDevice(), static_cast<VPX::SoundConfigTypes>(table->m_settings.GetPlayer_Sound3D()), table->m_settings.GetPlayer_AlsaDefaultPlaybackDevice()))
+      , m_resURIResolver(m_pluginManager.GetMsgAPI(), m_pluginAPI.GetVPXEndPointId(), true, true, true, true)
 {
    // For the time being, lots of access are made through the global singleton, so ensure we are unique, and define it as soon as needed
    assert(g_pplayer == nullptr);
@@ -993,7 +993,7 @@ Player::~Player()
    {
       if (auto ph = editable->GetIRenderable(); ph)
          ph->RenderRelease();
-      editable->TimerRelease(m_vht);
+      editable->TimerRelease(/*m_vht*/); // as everything is killed, not necessary to remove from timer list
    }
    assert(m_vballDelete.empty());
    m_vball.clear();
@@ -1186,7 +1186,7 @@ void Player::ApplyPlayingState(const bool play)
    #endif
    if (play)
    {
-      m_lastKnownGoodCounter++; // Reset hang script detection
+      m_LastKnownGoodCounter++; // Reset hang script detection
       m_noTimeCorrect = true;   // Disable physics engine time correction on next physic update
       UnpauseMusic();
       PLOGI << "Unpausing Game";
@@ -1577,11 +1577,6 @@ void Player::ProcessOSMessages(const bool isInitialized)
       if ((usec() - startTick) > 1000ull)
          break;
    }
-
-   #if BX_PLATFORM_WINDOWS
-   if (m_renderer)
-      m_renderer->m_renderDevice->OnInputSampled();
-   #endif
 };
 
 class AttractCapture
@@ -2089,11 +2084,11 @@ void Player::PrepareFrame()
    m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PREPARE_FRAME);
 
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights
-   m_lastKnownGoodCounter++;
+   m_LastKnownGoodCounter++;
    m_startFrameTick = usec();
-
+   
    m_pluginAPI.BroadcastVPXMsg(m_onPrepareFrameMsgId, nullptr);
-
+   
    // Update visually animated parts (e.g. primitives, reels, gates, lights, bumper-skirts, hittargets, etc)
    if (IsPlaying())
    {

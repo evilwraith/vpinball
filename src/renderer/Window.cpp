@@ -5,6 +5,11 @@
 
 #include <SDL3/SDL_video.h>
 
+#if defined(__linux__)
+#include <filesystem>
+#include <fstream>
+#endif
+
 #ifdef _MSC_VER
 #include <dxgi1_2.h>
 #pragma comment(lib, "dxgi.lib")
@@ -20,6 +25,45 @@
 
 namespace VPX
 {
+
+#if defined(__linux__)
+static bool IsNumericString(const string& value)
+{
+   return !value.empty() && std::ranges::all_of(value, [](const char c) { return c >= '0' && c <= '9'; });
+}
+
+static vector<string> GetConnectedDrmConnectorNames()
+{
+   vector<string> connectors;
+   std::error_code ec;
+   const std::filesystem::path drmPath("/sys/class/drm");
+   if (!std::filesystem::exists(drmPath, ec))
+      return connectors;
+
+   for (const auto& entry : std::filesystem::directory_iterator(drmPath, ec))
+   {
+      if (ec || !entry.is_directory())
+         continue;
+
+      const string entryName = entry.path().filename().string();
+      const size_t dashPos = entryName.find('-');
+      if (dashPos == string::npos)
+         continue;
+
+      std::ifstream status(entry.path() / "status");
+      string value;
+      if (!status || !std::getline(status, value))
+         continue;
+      if (value != "connected")
+         continue;
+
+      connectors.push_back(entryName.substr(dashPos + 1));
+   }
+
+   std::ranges::sort(connectors);
+   return connectors;
+}
+#endif
 
 static int GetPixelFormatDepth(SDL_PixelFormat format)
 {
@@ -91,6 +135,19 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
       PLOGW << "The selected display \"" << settings.GetWindow_Display((int)m_windowId)
             << "\" is not available. Using display \"" << selectedDisplay.displayName << "\" instead.";
    }
+
+#if defined(__RK3588__)
+   const char* sdlDriver = SDL_GetCurrentVideoDriver();
+   const bool isKmsdrm = sdlDriver && strcmp(sdlDriver, "kmsdrm") == 0;
+   if (isKmsdrm
+      && m_windowId != VPXWindowId::VPXWINDOW_Playfield
+      && m_windowId != VPXWindowId::VPXWINDOW_ScoreView)
+   {
+      // KMSDRM does not reliably support non-fullscreen ancillary windows.
+      // Force fullscreen to match the selected display mode.
+      m_fullscreen = true;
+   }
+#endif
    int wnd_x = selectedDisplay.left;
    int wnd_y = selectedDisplay.top;
    int nDisplayModes;
@@ -115,6 +172,24 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
             m_bitdepth = GetPixelFormatDepth(currentMode->format);
         }
       }
+#if defined(__RK3588__)
+      else if (isKmsdrm
+         && m_windowId != VPXWindowId::VPXWINDOW_Playfield
+         && m_windowId != VPXWindowId::VPXWINDOW_ScoreView) {
+         const SDL_DisplayMode* currentMode = SDL_GetCurrentDisplayMode(selectedDisplay.display);
+         if (currentMode) {
+            fullscreenDisplayMode = currentMode;
+            m_screenwidth = currentMode->w;
+            m_screenheight = currentMode->h;
+            m_width = currentMode->w;
+            m_height = currentMode->h;
+            m_refreshrate = currentMode->refresh_rate;
+            m_bitdepth = GetPixelFormatDepth(currentMode->format);
+            PLOGI << "Window::Window: KMSDRM forcing fullscreen mode " << m_width << "x" << m_height
+                  << " on display " << selectedDisplay.displayName << " for window " << (int)m_windowId;
+         }
+      }
+#endif
       else
       {
          const int requestedW = settings.GetWindow_FSWidth(m_windowId);
@@ -215,6 +290,16 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
       #elif defined(ENABLE_BGFX)
          // BGFX does not need the SDL window to have the SDL_WINDOW_OPENGL / SDL_WINDOW_VULKAN / SDL_WINDOW_METAL flag (see BGFX SDL example)
          // Using these flags would lead SDL to create the swapchain while we want BGFX to do it for us
+         #if defined(__RK3588__)
+         // On Linux KMSDRM, we need SDL_WINDOW_OPENGL to populate SDL.window.kmsdrm.gbm_surface
+         const char* driver = SDL_GetCurrentVideoDriver();
+         PLOGI << "Window::Window: Detected SDL Driver: " << (driver ? driver : "NULL");
+         if (driver && strcmp(driver, "kmsdrm") == 0) {
+            wnd_flags |= SDL_WINDOW_OPENGL;
+            SDL_SetHint("SDL_KMSDRM_SKIP_EGL_SURFACE", "1");
+            PLOGI << "Window::Window: KMSDRM detected. Enabling SDL_WINDOW_OPENGL but requesting SKIP_EGL_SURFACE.";
+         }
+         #endif
       #elif defined(ENABLE_DX9)
          // DX9 does not need any special flag either
       #endif
@@ -319,6 +404,12 @@ void Window::RaiseAndFocus()
 bool Window::IsFocused() const {
    if (m_isVR)
       return true;
+#if defined(__RK3588__)
+   // In standalone mode (especially cabinet/console), we treat the main window as always having focus
+   // to prevent auto-pause when other auxiliary windows (DMD, Backglass) technically steal SDL focus.
+   if (m_windowId == VPXWindowId::VPXWINDOW_Playfield)
+       return true;
+#endif
    return m_nwnd == SDL_GetKeyboardFocus();
 }
 
@@ -371,6 +462,11 @@ vector<Window::DisplayConfig> Window::GetDisplays()
 {
    vector<Window::DisplayConfig> displays;
    const SDL_DisplayID primaryID = SDL_GetPrimaryDisplay();
+#if defined(__linux__)
+   const char* sdlDriver = SDL_GetCurrentVideoDriver();
+   const bool isKmsdrm = sdlDriver && strcmp(sdlDriver, "kmsdrm") == 0;
+   const vector<string> drmConnectorNames = isKmsdrm ? GetConnectedDrmConnectorNames() : vector<string>();
+#endif
 
    int i = 0;
    int displayCount = 0;
@@ -382,6 +478,10 @@ vector<Window::DisplayConfig> Window::GetDisplays()
          DisplayConfig displayConf {};
          displayConf.display = displayIDs[i];
          displayConf.displayName = SDL_GetDisplayName(displayIDs[i]);
+#if defined(__linux__)
+         if (isKmsdrm && IsNumericString(displayConf.displayName) && i < (int)drmConnectorNames.size())
+            displayConf.displayName = drmConnectorNames[i];
+#endif
          displayConf.top = displayBounds.y;
          displayConf.left = displayBounds.x;
          displayConf.width = displayBounds.w;

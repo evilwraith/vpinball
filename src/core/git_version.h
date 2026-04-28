@@ -2,6 +2,6 @@
 #define _GIT_VERSION_H_
 
 #define GIT_REVISION 9999
-#define GIT_SHA      "unknown"
+#define GIT_SHA      "441ade1"
 
 #endif

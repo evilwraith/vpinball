@@ -8,7 +8,7 @@ namespace VPX::InGameUI
 {
 
 GraphicSettingsPage::GraphicSettingsPage()
-   : InGameUIPage("Graphics Settings"s, ""s, SaveMode::Both)
+   : InGameUIPage("Graphic Settings"s, ""s, SaveMode::Both)
 {
    BuildPage();
 }
@@ -103,7 +103,10 @@ void GraphicSettingsPage::BuildPage()
       vector<string> renderers;
       for (int i = 0; i < nRendererSupported; i++)
          if (supportedRenderers[i] != bgfx::RendererType::Noop)
-            renderers.push_back(bgfxRendererNames[supportedRenderers[i]]);
+#ifdef _DEBUG
+            if (supportedRenderers[i] != bgfx::RendererType::Direct3D12)
+#endif
+               renderers.push_back(bgfxRendererNames[supportedRenderers[i]]);
       AddItem(std::make_unique<InGameUIItem>(
          VPX::Properties::EnumPropertyDef(""s, ""s, "Graphics Backend"s, ""s, false, 0, 0, renderers),
          [this, renderers]() { return max(0, FindIndexOf(renderers, m_player->m_ptable->m_settings.GetPlayer_GfxBackend())); }, // Live

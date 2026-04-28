@@ -5,6 +5,10 @@
 
 #include <functional>
 #include <cassert>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 #include "common.h"
 
@@ -322,6 +326,20 @@ static uint32_t endpointId, nextDmdId;
 
 static std::vector<FlexDMD*> flexDmds;
 
+struct DMDFrameCache
+{
+   unsigned int publishedFrameId = 0;
+   unsigned int width = 0;
+   unsigned int height = 0;
+   RenderMode renderMode = RenderMode_DMD_GRAY_4;
+   int frontIndex = 0;
+   std::vector<uint8_t> rgbFrames[2];
+   std::vector<float> lumFrames[2];
+};
+
+static std::mutex dmdFrameCacheMutex;
+static std::unordered_map<uint32_t, DMDFrameCache> dmdFrameCaches;
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Alphanumeric segment displays
@@ -522,15 +540,62 @@ static unsigned int getDmdSrcId, onDmdSrcChangeId;
 
 static DisplayFrame GetRenderFrame(const CtlResId id)
 {
+   std::lock_guard<std::mutex> lock(dmdFrameCacheMutex);
    for (FlexDMD* pFlex : flexDmds)
    {
       if ((endpointId == id.endpointId) && (pFlex->GetId() == id.resId))
       {
          pFlex->Render();
          if (pFlex->GetRenderMode() == RenderMode_DMD_RGB)
-            return { pFlex->GetFrameId(), pFlex->UpdateRGBFrame() };
+         {
+            DMDFrameCache& cache = dmdFrameCaches[pFlex->GetId()];
+            const unsigned int frameId = pFlex->GetFrameId();
+            const unsigned int width = pFlex->GetWidth();
+            const unsigned int height = pFlex->GetHeight();
+            const size_t frameBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+            if ((cache.width != width) || (cache.height != height) || (cache.renderMode != RenderMode_DMD_RGB))
+            {
+               cache = {};
+               cache.width = width;
+               cache.height = height;
+               cache.renderMode = RenderMode_DMD_RGB;
+               cache.rgbFrames[0].resize(frameBytes);
+               cache.rgbFrames[1].resize(frameBytes);
+            }
+            if (cache.publishedFrameId != frameId)
+            {
+               const int nextIndex = 1 - cache.frontIndex;
+               std::memcpy(cache.rgbFrames[nextIndex].data(), pFlex->UpdateRGBFrame(), frameBytes);
+               cache.frontIndex = nextIndex;
+               cache.publishedFrameId = frameId;
+            }
+            return { cache.publishedFrameId, cache.rgbFrames[cache.frontIndex].data() };
+         }
          else if ((pFlex->GetRenderMode() == RenderMode_DMD_GRAY_2) || (pFlex->GetRenderMode() == RenderMode_DMD_GRAY_4))
-            return { pFlex->GetFrameId(), pFlex->UpdateLumFP32Frame() };
+         {
+            DMDFrameCache& cache = dmdFrameCaches[pFlex->GetId()];
+            const unsigned int frameId = pFlex->GetFrameId();
+            const unsigned int width = pFlex->GetWidth();
+            const unsigned int height = pFlex->GetHeight();
+            const size_t frameCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+            if ((cache.width != width) || (cache.height != height) || (cache.renderMode == RenderMode_DMD_RGB))
+            {
+               cache = {};
+               cache.width = width;
+               cache.height = height;
+               cache.renderMode = pFlex->GetRenderMode();
+               cache.lumFrames[0].resize(frameCount);
+               cache.lumFrames[1].resize(frameCount);
+            }
+            if (cache.publishedFrameId != frameId)
+            {
+               const int nextIndex = 1 - cache.frontIndex;
+               std::memcpy(cache.lumFrames[nextIndex].data(), pFlex->UpdateLumFP32Frame(), frameCount * sizeof(float));
+               cache.frontIndex = nextIndex;
+               cache.publishedFrameId = frameId;
+            }
+            return { cache.publishedFrameId, cache.lumFrames[cache.frontIndex].data() };
+         }
          return { 0, nullptr };
       }
    }
@@ -605,6 +670,10 @@ static void OnShowChanged(FlexDMD* pFlexI)
 static void OnFlexDestroyed(FlexDMD* pFlex)
 {
    bool showChanged = pFlex->GetShow();
+   {
+      std::lock_guard<std::mutex> lock(dmdFrameCacheMutex);
+      dmdFrameCaches.erase(pFlex->GetId());
+   }
    std::erase(flexDmds, pFlex);
    if (showChanged)
       OnShowChanged(pFlex);

@@ -2,7 +2,7 @@
 
 #include "B2SReelDisplay.h"
 #include "../controls/B2SReelBox.h"
-#include <format>
+#include "utils/format_compat.h"
 
 namespace B2SLegacy {
 

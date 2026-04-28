@@ -95,15 +95,15 @@
 float3 faaa(const float2 u)
 {
 #ifdef GLSL
-	const float FAAAOffMult[12] = float[]( FAAA_QUALITY__P0, FAAA_QUALITY__P1,
-		FAAA_QUALITY__P2, FAAA_QUALITY__P3, FAAA_QUALITY__P4, FAAA_QUALITY__P5,
-		FAAA_QUALITY__P6, FAAA_QUALITY__P7, FAAA_QUALITY__P8, FAAA_QUALITY__P9,
-		FAAA_QUALITY__P10, FAAA_QUALITY__P11 );
+	const float FAAAOffMult[12] = float[]( float(FAAA_QUALITY__P0), float(FAAA_QUALITY__P1),
+		float(FAAA_QUALITY__P2), float(FAAA_QUALITY__P3), float(FAAA_QUALITY__P4), float(FAAA_QUALITY__P5),
+		float(FAAA_QUALITY__P6), float(FAAA_QUALITY__P7), float(FAAA_QUALITY__P8), float(FAAA_QUALITY__P9),
+		float(FAAA_QUALITY__P10), float(FAAA_QUALITY__P11) );
 #else
-	const float FAAAOffMult[12] = { FAAA_QUALITY__P0, FAAA_QUALITY__P1,
-		FAAA_QUALITY__P2, FAAA_QUALITY__P3, FAAA_QUALITY__P4, FAAA_QUALITY__P5,
-		FAAA_QUALITY__P6, FAAA_QUALITY__P7, FAAA_QUALITY__P8, FAAA_QUALITY__P9,
-		FAAA_QUALITY__P10, FAAA_QUALITY__P11 };
+	const float FAAAOffMult[12] = { float(FAAA_QUALITY__P0), float(FAAA_QUALITY__P1),
+		float(FAAA_QUALITY__P2), float(FAAA_QUALITY__P3), float(FAAA_QUALITY__P4), float(FAAA_QUALITY__P5),
+		float(FAAA_QUALITY__P6), float(FAAA_QUALITY__P7), float(FAAA_QUALITY__P8), float(FAAA_QUALITY__P9),
+		float(FAAA_QUALITY__P10), float(FAAA_QUALITY__P11) };
 #endif
 
 	const float3 rgbyM = texStereoNoLod(tex_fb_unfiltered, u).xyz;

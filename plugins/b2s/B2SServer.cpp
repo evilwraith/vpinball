@@ -4,6 +4,9 @@
 
 #include "B2SServer.h"
 
+#include <algorithm>
+#include <sstream>
+
 namespace B2S {
 
 B2SServer* B2SServer::m_singleton = nullptr;
@@ -150,7 +153,9 @@ void B2SServer::UpdateDevSrc()
    uint16_t index = 0;
    for (const auto& [id, v] : m_states)
    {
-      m_devSrcNames[index] = std::format("B2S.Data #{}", id);
+      std::ostringstream name;
+      name << "B2S.Data #" << id;
+      m_devSrcNames[index] = name.str();
       m_devSrc.deviceDefs[index].name = m_devSrcNames[index].c_str();
       m_devSrc.deviceDefs[index].id.groupId = 0x0001;
       m_devSrc.deviceDefs[index].id.deviceId = static_cast<uint16_t>(id);
@@ -188,7 +193,7 @@ void MSGPIAPI B2SServer::RegisterStateChangeCallback(unsigned int deviceIndex, i
    if (auto mapIt = m_singleton->m_stateChgCallbacks.find(b2sId); mapIt == m_singleton->m_stateChgCallbacks.end())
       m_singleton->m_stateChgCallbacks[b2sId] = vector<ChgCallback>();
    auto& callbacks = m_singleton->m_stateChgCallbacks[b2sId];
-   auto it = std::ranges::find_if(callbacks, [&cb](const ChgCallback& a) { return a.m_callback == cb; });
+   auto it = std::find_if(callbacks.begin(), callbacks.end(), [&cb](const ChgCallback& a) { return a.m_callback == cb; });
    if (isRegister)
    {
       if (it != callbacks.end())

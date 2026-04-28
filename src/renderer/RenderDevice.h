@@ -18,6 +18,9 @@
 #include "Window.h"
 
 #include <SDL3/SDL.h>
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
 
 #if defined(ENABLE_BGFX)
 #include <thread>
@@ -146,6 +149,7 @@ public:
    // (live) RenderDevice state and operation API
 
    void Flip();
+   void SetPrerenderMode(const bool prerendering) { m_isPrerendering.store(prerendering, std::memory_order_relaxed); }
    void WaitForVSync(const bool asynchronous);
    float GetVisualLatency() const; // Average delay between when the frame is prepared and when it will be viewed by the player (including TV/display/headset latency)
    float GetPredictedDisplayDelay() const; // Delay between now (when called) and when the frame will be viewed by the player (including TV/display/headset latency)
@@ -223,8 +227,6 @@ public:
    string m_GPU_name;
    string m_driver_name;
 
-   bool m_noMovingBalls = false;
-
 private:
    const bool m_isAnaglyph;
    const bool m_isVR;
@@ -237,6 +239,7 @@ private:
 
    RenderState m_current_renderstate, m_renderstate, m_defaultRenderState;
    bool m_logNextFrame = false; // Output a log of next frame to main application log
+   std::atomic<bool> m_isPrerendering { false };
 
 #if !defined(__STANDALONE__) && !defined(ENABLE_BGFX)
    bool m_dwm_enabled;
@@ -276,22 +279,11 @@ public:
 
    uint64_t m_lastGPUFrameLength = 0;
 
-#if BX_PLATFORM_WINDOWS
-   void OnInputSampled();
-   struct PresentMonProvider* m_presentMonProvider = nullptr;
-#endif
-
 private:
    void SubmitAndFlipFrame(bool present);
    bgfx::TextureFormat::Enum SelectBackBufferFormat(const VPX::Window* wnd, bgfx::TextureFormat::Enum defaultFormat, bool isWCG) const;
    static colorFormat BGFXtoVPXTextureFormat(bgfx::TextureFormat::Enum format);
    static void RenderThread(RenderDevice* rd, bgfx::Init init);
-   void BGFXDesktopRenderLoop(const bgfx::Init& init);
-#ifdef ENABLE_XR
-   void BGFXOpenXRRenderLoop(const bgfx::Init& init);
-#endif
-
-   uint32_t m_frameIndex = 0;
 
    uint32_t m_lastPresentFrameIdx = 0;
    float m_renderLatency = 0.f;

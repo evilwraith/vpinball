@@ -15,6 +15,12 @@
 
 namespace Flex {
 
+namespace {
+
+constexpr uint64_t kMinRenderIntervalMs = 16;
+
+}
+
 FlexDMD::FlexDMD(VPXPluginAPI* vpxApi) :
    m_vpxApi(vpxApi)
 {
@@ -57,10 +63,11 @@ void FlexDMD::SetRun(bool run)
 
 void FlexDMD::Render()
 {
-   // TODO we could do it on a separate thread and afford a latency of 1 frame to remove all overhead
+   // Render at a stable producer cadence so multiple consumers polling the same source
+   // do not advance the scene graph several times within a single visible display frame.
    uint64_t tick = SDL_GetTicks();
    uint64_t elapsedMs = tick - m_lastRenderTick;
-   if ((m_renderLockCount == 0) && elapsedMs > 2)
+   if ((m_renderLockCount == 0) && ((m_pSurface == nullptr) || (elapsedMs >= kMinRenderIntervalMs)))
    {
       m_frameId++;
       m_lum8FrameDirty = m_lumFP32FrameDirty = m_lumFrameDirty = m_rgbFrameDirty = m_rgbaFrameDirty = true;

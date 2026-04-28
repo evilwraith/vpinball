@@ -8,12 +8,22 @@ namespace VPX
 
 std::unique_ptr<AudioStreamPlayer> AudioStreamPlayer::Create(SDL_AudioDeviceID sdlDevice, int frequency, int channels, bool isFloat)
 {
+   if (sdlDevice == 0)
+   {
+      PLOGE << "Failed to create stream: invalid SDL audio device";
+      return nullptr;
+   }
+
    SDL_AudioSpec streamSpec;
    streamSpec.freq = frequency;
    streamSpec.format = isFloat ? SDL_AUDIO_F32 : SDL_AUDIO_S16;
    streamSpec.channels = channels;
    SDL_AudioSpec deviceSpec;
-   SDL_GetAudioDeviceFormat(sdlDevice, &deviceSpec, nullptr);
+   if (!SDL_GetAudioDeviceFormat(sdlDevice, &deviceSpec, nullptr))
+   {
+      PLOGE << "Failed to query SDL audio device format: " << SDL_GetError();
+      return nullptr;
+   }
    SDL_AudioStream* stream = SDL_CreateAudioStream(&streamSpec, &deviceSpec);
    if (stream)
    {

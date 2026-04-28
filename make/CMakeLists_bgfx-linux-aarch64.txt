@@ -17,6 +17,16 @@ project(vpinball VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_REV}")
 
 include("${CMAKE_SOURCE_DIR}/make/CMakeLists_common_standalone.txt")
 
+
+set(VPX_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated/include")
+file(MAKE_DIRECTORY "${VPX_GENERATED_INCLUDE_DIR}")
+file(CONFIGURE
+   OUTPUT "${VPX_GENERATED_INCLUDE_DIR}/format"
+   CONTENT "// license:GPLv3+\n#pragma once\n\n#include \"${CMAKE_SOURCE_DIR}/src/utils/format_shim_impl.h\"\n"
+   @ONLY
+)
+include_directories(BEFORE "${VPX_GENERATED_INCLUDE_DIR}")
+
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 set(CMAKE_INSTALL_RPATH "$ORIGIN")
 
@@ -43,6 +53,7 @@ target_include_directories(vpinball PUBLIC
    pin
    src
    plugins
+   /usr/include/libdrm
 )
 
 target_precompile_headers(vpinball PUBLIC
@@ -105,8 +116,12 @@ target_link_libraries(vpinball PUBLIC
    SDL3_ttf
    freeimage
    hidapi-hidraw
+   dof
+   drm
+   gbm
    winevbs
 )
+
 
 set_target_properties(vpinball PROPERTIES
    RUNTIME_OUTPUT_NAME "${APP_NAME}"

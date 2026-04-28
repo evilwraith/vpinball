@@ -5,10 +5,58 @@
 #include "PUPCustomPos.h"
 #include "LibAv.h"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 
 namespace PUP {
+
+namespace {
+
+constexpr float kFullDmdAspect = 16.0f / 9.0f;
+constexpr float kDmdAspect = 4.0f;
+
+bool GetScoreViewAspectForScreen(const PUPScreen& screen, float& aspect)
+{
+   switch (screen.GetScreenNum())
+   {
+   case PUP_SCREEN_FULLDMD:
+      aspect = kFullDmdAspect;
+      return true;
+   case PUP_SCREEN_DMD:
+      aspect = kDmdAspect;
+      return true;
+   default:
+      return false;
+   }
+}
+
+SDL_Rect FitRectToAspect(const int x, const int y, const int width, const int height, const float targetAspect)
+{
+   if (width <= 0 || height <= 0 || targetAspect <= 0.0f)
+      return { x, y, std::max(0, width), std::max(0, height) };
+
+   const float availableAspect = static_cast<float>(width) / static_cast<float>(height);
+   int fittedWidth = width;
+   int fittedHeight = height;
+   int fittedX = x;
+   int fittedY = y;
+
+   if (availableAspect > targetAspect)
+   {
+      fittedWidth = std::max(1, static_cast<int>(std::lround(static_cast<float>(height) * targetAspect)));
+      fittedX += (width - fittedWidth) / 2;
+   }
+   else if (availableAspect < targetAspect)
+   {
+      fittedHeight = std::max(1, static_cast<int>(std::lround(static_cast<float>(width) / targetAspect)));
+      fittedY += (height - fittedHeight) / 2;
+   }
+
+   return { fittedX, fittedY, fittedWidth, fittedHeight };
+}
+
+}
 
 MSGPI_FLOAT_VAL_SETTING(pupMainVolume, "MainVol", "Main Volume", "Overall volume", true, 0.f, 1.f, 0.01f, 1.f);
 
@@ -634,7 +682,7 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
       break;
    case VPXWindowId::VPXWINDOW_Backglass:
       rootScreen = me->GetScreen(2); // select 2 or 6 (user settings ?)
-      if (rootScreen == nullptr || rootScreen->GetCustomPos() != nullptr)
+      if (rootScreen == nullptr)
          rootScreen = me->GetScreen(6);
       padLeft = pupBGPadLeft_Get();
       padRight = pupBGPadRight_Get();
@@ -643,7 +691,7 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
       break;
    case VPXWindowId::VPXWINDOW_ScoreView:
       rootScreen = me->GetScreen(5); // select 1 or 5 (user settings ?)
-      if (rootScreen == nullptr || rootScreen->GetCustomPos() != nullptr)
+      if (rootScreen == nullptr)
          rootScreen = me->GetScreen(1);
       padLeft = pupSVPadLeft_Get();
       padRight = pupSVPadRight_Get();
@@ -652,7 +700,7 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
       break;
    default: break;
    }
-   if (rootScreen == nullptr || rootScreen->GetCustomPos() != nullptr)
+   if (rootScreen == nullptr)
       return false;
 
    if (!LibAV::LibAV::GetInstance().isLoaded)
@@ -660,7 +708,20 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
 
    renderCtx->srcWidth = renderCtx->outWidth;
    renderCtx->srcHeight = renderCtx->outHeight;
-   rootScreen->SetBounds(padLeft, padTop, static_cast<int>(renderCtx->srcWidth) - padLeft - padRight, static_cast<int>(renderCtx->srcHeight) - padTop - padBottom);
+   const int availableWidth = static_cast<int>(renderCtx->srcWidth) - padLeft - padRight;
+   const int availableHeight = static_cast<int>(renderCtx->srcHeight) - padTop - padBottom;
+   SDL_Rect rootBounds { padLeft, padTop, std::max(0, availableWidth), std::max(0, availableHeight) };
+   bool scoreViewFitted = false;
+   if (renderCtx->window == VPXWindowId::VPXWINDOW_ScoreView)
+   {
+      float targetAspect = 0.0f;
+      if (GetScoreViewAspectForScreen(*rootScreen, targetAspect))
+      {
+         rootBounds = FitRectToAspect(rootBounds.x, rootBounds.y, rootBounds.w, rootBounds.h, targetAspect);
+         scoreViewFitted = true;
+      }
+   }
+   rootScreen->SetBounds(rootBounds.x, rootBounds.y, rootBounds.w, rootBounds.h);
 
    // Render all children of rootScreen according to the following render order:
    // - Back screens (ForceBack or SetAsBackground)

@@ -3,7 +3,7 @@
 #include "Controller.h"
 #include "Game.h"
 #include <thread>
-#include <format>
+#include "../../src/utils/format_compat.h"
 
 #include "plugins/VPXPlugin.h" // Only used for optional feature (visual feedback on error)
 

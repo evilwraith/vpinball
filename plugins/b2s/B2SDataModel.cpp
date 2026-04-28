@@ -1,7 +1,8 @@
 // license:GPLv3+
 
 #include <charconv>
-#include <format>
+#include <iomanip>
+#include <sstream>
 
 #include "common.h"
 #include "B2SDataModel.h"
@@ -242,6 +243,13 @@ B2SBulb::~B2SBulb()
    DeleteTexture(m_offImage);
 }
 
+static string FormatIndexedName(const string& prefix, int index, size_t digits)
+{
+   string suffix = std::to_string(index);
+   if (suffix.length() < digits)
+      suffix.insert(0, digits - suffix.length(), '0');
+   return prefix + suffix;
+}
 
 B2SImage::B2SImage(const tinyxml2::XMLNode& root)
    : m_image(GetTextureAttribute(root, ""s, "Value"s))
@@ -280,17 +288,11 @@ B2SReelImage* B2SReel::GetImage(const string& name, int index) const
    string imgName;
    if (name.ends_with("_00"))
    {
-      if (index < 0)
-         imgName = std::format("{}Empty", name.substr(0, name.length() - 2));
-      else
-         imgName = std::format("{}{:02}", name.substr(0, name.length() - 2), index);
+      imgName = FormatIndexedName(name.substr(0, name.length() - 2), index, 2);
    }
    else if (name.ends_with("_0"))
    {
-      if (index < 0)
-         imgName = std::format("{}Empty", name.substr(0, name.length() - 1));
-      else
-         imgName = std::format("{}{:01}", name.substr(0, name.length() - 1), index);
+      imgName = FormatIndexedName(name.substr(0, name.length() - 1), index, 1);
    }
    else
       return nullptr;

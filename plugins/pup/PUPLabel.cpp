@@ -9,6 +9,9 @@
  */
 
 #include "PUPLabel.h"
+
+#include <sstream>
+#include <algorithm>
 #include "PUPScreen.h"
 #include "PUPPlaylist.h"
 #include "PUPManager.h"
@@ -19,7 +22,6 @@
 #pragma warning(pop)
 
 #include <filesystem>
-#include <format>
 
 #define LOG_PUPLABEL 0
 
@@ -28,6 +30,39 @@ namespace PUP {
 #ifndef M_PI
 #define M_PI 3.1415926535897932384626433832795
 #endif
+
+static string ReplaceUnsupportedGlyphs(TTF_Font* pFont, const string& text)
+{
+   string filtered;
+   filtered.reserve(text.size());
+
+   const char* cursor = text.c_str();
+   size_t remaining = text.size();
+   while (remaining > 0)
+   {
+      const char* codepointStart = cursor;
+      const Uint32 codepoint = SDL_StepUTF8(&cursor, &remaining);
+      if (codepoint == 0)
+         break;
+
+      if (codepoint == '\n')
+      {
+         filtered.push_back('\n');
+         continue;
+      }
+
+      if (codepoint != SDL_INVALID_UNICODE_CODEPOINT && TTF_FontHasGlyph(pFont, codepoint))
+      {
+         filtered.append(codepointStart, static_cast<size_t>(cursor - codepointStart));
+      }
+      else
+      {
+         filtered.push_back(' ');
+      }
+   }
+
+   return filtered;
+}
 
 // FIXME rotation is done via CPU (90/270 degress render blank via GPU?)
 static SDL_Surface* RotateSurface(SDL_Surface* src, float angleDeg)
@@ -175,7 +210,7 @@ void PUPLabel::SetCaption(const string& szCaption)
       return;
 
    string szText = szCaption;
-   std::ranges::replace(szText.begin(), szText.end(), '~', '\n');
+   std::replace(szText.begin(), szText.end(), '~', '\n');
    szText = string_replace_all(szText, "\\r"s, '\n');
 
    {
@@ -1037,8 +1072,7 @@ PUPLabel::RenderState PUPLabel::UpdateLabelTexture(int outHeight, TTF_Font* pFon
       m_xAlign == PUP_LABEL_XALIGN_RIGHT  ? TTF_HORIZONTAL_ALIGN_RIGHT :
                                              TTF_HORIZONTAL_ALIGN_LEFT);
 
-   string text = szCaption;
-   std::replace_if(text.begin(), text.end(), [pFont](char c) { return c != '\n' && !TTF_FontHasGlyph(pFont, c); }, ' ');
+   const string text = ReplaceUnsupportedGlyphs(pFont, szCaption);
 
    // See pDMDLabelSetAutoSize — shrink font until text fits within autow/autoh dimensions
    const float maxW = (m_autoFitWidth > 0) ? (m_autoFitWidth / 100.0f) * static_cast<float>(outHeight) * (16.0f / 9.0f) : 0;
@@ -1233,15 +1267,26 @@ PUPLabel::RenderState PUPLabel::UpdateLabelTexture(int outHeight, TTF_Font* pFon
 
 string PUPLabel::ToString() const
 {
-   return std::format("name={}, caption={}, visible={}, size={}, color={}, angle={}, xAlign={}, yAlign={}, xPos={}, yPos={}, pagenum={}, szPath={}", m_szName, m_szCaption,
-      (m_visible ? "true" : "false"), m_size, m_color, m_angle,
-      (m_xAlign == PUP_LABEL_XALIGN_LEFT          ? "LEFT"
-            : m_xAlign == PUP_LABEL_XALIGN_CENTER ? "CENTER"
-                                                  : "RIGHT"),
-      (m_yAlign == PUP_LABEL_YALIGN_TOP           ? "TOP"
-            : m_yAlign == PUP_LABEL_YALIGN_CENTER ? "CENTER"
-                                                  : "BOTTOM"),
-      m_xPos, m_yPos, m_pagenum, m_szPath.string());
+   std::ostringstream out;
+   out << "name=" << m_szName
+      << ", caption=" << m_szCaption
+      << ", visible=" << (m_visible ? "true" : "false")
+      << ", size=" << m_size
+      << ", color=" << m_color
+      << ", angle=" << m_angle
+      << ", xAlign="
+      << (m_xAlign == PUP_LABEL_XALIGN_LEFT          ? "LEFT"
+         : m_xAlign == PUP_LABEL_XALIGN_CENTER ? "CENTER"
+                                      : "RIGHT")
+      << ", yAlign="
+      << (m_yAlign == PUP_LABEL_YALIGN_TOP           ? "TOP"
+         : m_yAlign == PUP_LABEL_YALIGN_CENTER ? "CENTER"
+                                      : "BOTTOM")
+      << ", xPos=" << m_xPos
+      << ", yPos=" << m_yPos
+      << ", pagenum=" << m_pagenum
+      << ", szPath=" << m_szPath.string();
+   return out.str();
 }
 
 PUPLabel::Animation::Animation(PUPLabel* label, unsigned int lengthMs, int foregroundColor, int flashingPeriod)

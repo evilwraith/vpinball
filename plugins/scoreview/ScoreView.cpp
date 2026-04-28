@@ -76,7 +76,6 @@ void ScoreView::Parse(const std::filesystem::path& path)
    layout.width = 1920.f;
    layout.height = 1080.f;
    layout.fit = ScoreView::Contain;
-   {
    Visual* visual = nullptr;
    const auto parseArray = [](const string& value) -> vector<float>
    {
@@ -372,7 +371,6 @@ void ScoreView::Parse(const std::filesystem::path& path)
       }
       //PLOGD << indent << ": " << key << " => " << value;
    }
-   }
    for (auto& visual : layout.visuals)
    {
       switch (visual.type)
@@ -507,6 +505,7 @@ void ScoreView::Select(const float scoreW, const float scoreH)
 
 bool ScoreView::Render(VPXRenderContext2D* ctx)
 {
+   static int s_renderLogCount = 0;
    if (m_invalidBestLayout)
    {
       m_invalidBestLayout = false;
@@ -514,7 +513,20 @@ bool ScoreView::Render(VPXRenderContext2D* ctx)
    }
 
    if (m_bestLayout == nullptr)
+   {
+      if (s_renderLogCount < 5)
+      {
+         LOGW(std::format("ScoreView: No matching layout for output {}x{}", ctx->outWidth, ctx->outHeight));
+         ++s_renderLogCount;
+      }
       return false;
+   }
+
+   if (s_renderLogCount < 5)
+   {
+      LOGI(std::format("ScoreView: Render layout ({}x{}) -> out {}x{}", m_bestLayout->width, m_bestLayout->height, ctx->outWidth, ctx->outHeight));
+      ++s_renderLogCount;
+   }
 
    // Fit the layout inside the output
    const float outAR = ctx->outWidth / ctx->outHeight;
@@ -541,7 +553,15 @@ bool ScoreView::Render(VPXRenderContext2D* ctx)
       {
          ResURIResolver::DisplayState dmd = m_resURIResolver.GetDisplayState(visual.srcUri);
          if (dmd.state.frame == nullptr)
+         {
+            static int s_dmdNullLog = 0;
+            if (s_dmdNullLog < 5)
+            {
+               LOGW(std::format("ScoreView: DMD frame null for src '{}'", visual.srcUri));
+               ++s_dmdNullLog;
+            }
             continue;
+         }
          LoadGlass(visual);
          m_vpxApi->UpdateTexture(&visual.dmdTex, dmd.source->width, dmd.source->height,
               dmd.source->frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F  ? VPXTextureFormat::VPXTEXFMT_BW32F

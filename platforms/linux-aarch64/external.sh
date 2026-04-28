@@ -17,6 +17,7 @@ echo "  LIBALTSOUND_SHA: ${LIBALTSOUND_SHA}"
 echo "  LIBDOF_SHA: ${LIBDOF_SHA}"
 echo "  FFMPEG_SHA: ${FFMPEG_SHA}"
 echo "  LIBZIP_SHA: ${LIBZIP_SHA}"
+echo "  FMT_SHA: ${FMT_SHA}"
 echo "  LIBWINEVBS_SHA: ${LIBWINEVBS_SHA}"
 echo ""
 
@@ -41,13 +42,29 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
    curl -sL https://github.com/libsdl-org/SDL/archive/${SDL_SHA}.tar.gz -o SDL-${SDL_SHA}.tar.gz
    tar xzf SDL-${SDL_SHA}.tar.gz
    mv SDL-${SDL_SHA} SDL
+   cp /workspaces/vpinball-1081-4kp/vpinball-1081-alp4k/patch/SDL3/SDL_kmsdrmvideo.c SDL/src/video/kmsdrm/SDL_kmsdrmvideo.c
+   patch -p0 < /workspaces/vpinball-1081-4kp/vpinball-1081-alp4k/patch/SDL3/SDL_waylandmouse.patch
    cd SDL
    cmake \
-      -DSDL_SHARED=ON \
-      -DSDL_STATIC=OFF \
-      -DSDL_TEST_LIBRARY=OFF \
-      -DSDL_X11=ON \
+      -DSDL_VIDEO=ON \
+      -DSDL_AUDIO=ON \
+      -DSDL_ASSEMBLY=ON \
+      -DSDL_KMSDRM_SHARED=ON \
       -DSDL_KMSDRM=ON \
+      -DSDL_STATIC=OFF \
+      -DSDL_TESTS=OFF \
+      -DSDL_X11=OFF \
+      -DSDL_WAYLAND=ON \
+      -DSDL_PULSEAUDIO=ON \
+      -DSDL_ALSA=ON \
+      -DSDL_LIBUDEV=ON \
+      -DSDL_ARMNEON=ON \
+      -DSDL_ROCKCHIP=ON \
+      -DSDL_OPENGLES=ON \
+      -DSDL_OPENGL=ON \
+      -DSDL_VULKAN=ON \
+      -DSDL_RENDER_VULKAN=ON \
+      -DSDL_UNIX_CONSOLE_BUILD=ON \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
    cmake --build build -- -j${NUM_PROCS}
@@ -125,6 +142,32 @@ if [ "${FREEIMAGE_EXPECTED_SHA}" != "${FREEIMAGE_FOUND_SHA}" ]; then
 fi
 
 #
+# build fmt (header-only)
+#
+
+FMT_EXPECTED_SHA="${FMT_SHA}"
+FMT_FOUND_SHA="$([ -f fmt/cache.txt ] && cat fmt/cache.txt || echo "")"
+
+if [ "${FMT_EXPECTED_SHA}" != "${FMT_FOUND_SHA}" ]; then
+   echo "Building fmt (headers). Expected: ${FMT_EXPECTED_SHA}, Found: ${FMT_FOUND_SHA}"
+
+   rm -rf fmt
+   mkdir fmt
+   cd fmt
+
+   curl -sL https://github.com/fmtlib/fmt/archive/refs/tags/${FMT_SHA}.tar.gz -o fmt-${FMT_SHA}.tar.gz
+   tar xzf fmt-${FMT_SHA}.tar.gz
+   mv fmt-${FMT_SHA} fmt
+
+   mkdir -p /workspaces/vpinball-1081-4kp/vpinball-1081-alp4k/third-party/include
+   cp -r fmt/include/fmt /workspaces/vpinball-1081-4kp/vpinball-1081-alp4k/third-party/include/
+
+   echo "$FMT_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
 # build bgfx
 #
 
@@ -145,11 +188,15 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
    cd bgfx.cmake
    rm -rf bgfx
    mv ../bgfx-${BGFX_PATCH_SHA} bgfx
+   cp /workspaces/vpinball-1081-4kp/vpinball-1081-alp4k/patch/bgfx/config.h bgfx/src/config.h
+   cp /workspaces/vpinball-1081-4kp/vpinball-1081-alp4k/patch/bgfx/glcontext_egl.cpp bgfx/src/glcontext_egl.cpp
+#   cp /workspaces/vpinball-1081-4kp/vpinball-1081-alp4k/patch/bgfx/renderer_vk.cpp bgfx/src/renderer_vk.cpp
    cmake -S. \
       -DBGFX_LIBRARY_TYPE=SHARED \
       -DBGFX_BUILD_TOOLS=OFF \
       -DBGFX_BUILD_EXAMPLES=OFF \
       -DBGFX_CONFIG_MULTITHREADED=ON \
+      -DBGFX_OPENGLES_VERSION=32 \
       -DBGFX_CONFIG_MAX_FRAME_BUFFERS=256 \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
@@ -212,7 +259,17 @@ if [ "${LIBDMDUTIL_EXPECTED_SHA}" != "${LIBDMDUTIL_FOUND_SHA}" ]; then
    tar xzf libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
    mv libdmdutil-${LIBDMDUTIL_SHA} libdmdutil
    cd libdmdutil
-   ./platforms/linux/aarch64/external.sh
+   if [ -f external/libvni/src/vni_heatshrink.h ]; then
+      if ! grep -q "<cstddef>" external/libvni/src/vni_heatshrink.h; then
+         sed -i '1i #include <cstddef>' external/libvni/src/vni_heatshrink.h
+      fi
+   fi
+   if [ -f external/libvni/src/vni_aes.h ]; then
+      if ! grep -q "<cstddef>" external/libvni/src/vni_aes.h; then
+         sed -i '1i #include <cstddef>' external/libvni/src/vni_aes.h
+      fi
+   fi
+   CXXFLAGS="-include cstddef" ./platforms/linux/aarch64/external.sh
    cmake \
       -DPLATFORM=linux \
       -DARCH=aarch64 \
@@ -313,6 +370,7 @@ if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
    LDFLAGS=-Wl,-rpath,\''$$$$ORIGIN'\' ./configure \
       --enable-shared \
       --disable-static \
+      --enable-neon \
       --disable-programs \
       --disable-doc
    make -j${NUM_PROCS}

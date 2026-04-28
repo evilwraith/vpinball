@@ -65,7 +65,7 @@ struct SoundSpec
 class AudioPlayer
 {
 public:
-   explicit AudioPlayer(const string& backglassDevice, const string& playfieldDevice, SoundConfigTypes playfieldSoundMode);
+   explicit AudioPlayer(const string& backglassDevice, const string& playfieldDevice, SoundConfigTypes playfieldSoundMode, const string& playfieldAlsaDefaultPlaybackDevice);
    ~AudioPlayer();
 
    void SetMainVolume(float backglassVolume, float playfieldVolume); // Overall gain, directly applied to all sounds, including the ones being played

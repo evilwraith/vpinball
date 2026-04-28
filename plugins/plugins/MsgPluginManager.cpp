@@ -346,7 +346,7 @@ std::shared_ptr<MsgPlugin> MsgPluginManager::RegisterPlugin(const std::string& i
 {
    assert(loadPlugin != nullptr);
    assert(unloadPlugin != nullptr);
-   auto plugin = std::make_shared<MsgPlugin>(id, name, description, author, version, link, loadPlugin, unloadPlugin, static_cast<unsigned int>(m_plugins.size() + 1));
+   auto plugin = std::make_shared<MsgPlugin>(id, name, description, author, version, link, loadPlugin, unloadPlugin, m_nextEndpointId++);
    m_plugins.push_back(plugin);
    return plugin;
 }
@@ -400,6 +400,8 @@ void MsgPluginManager::ScanPluginFolder(std::shared_ptr<MsgModuleLoader> loader,
       return;
    }
 
+   // Collect plugin directories containing plugin.cfg
+   std::vector<std::filesystem::directory_entry> pluginDirs;
    for (const auto& entry : std::filesystem::directory_iterator(pluginDir))
    {
       if (entry.is_directory())
@@ -416,21 +418,41 @@ void MsgPluginManager::ScanPluginFolder(std::shared_ptr<MsgModuleLoader> loader,
                PLOGE << "Plugin " << id << " has an invalid library reference to a missing file for " << libraryKey << ": " << libraryFile;
                continue;
             }
-            auto it = std::ranges::find_if(m_plugins, [&id](const auto& plugin) { return plugin->m_id == id; });
-            if (it != m_plugins.end())
-            {
-               // We should validate that the already registered plugin correspond to the newly located one
-               callback(**it);
-            }
-            else
-            {
-               auto plugin = std::make_shared<MsgPlugin>(id, unquote(ini["configuration"s].get("name"s)), unquote(ini["configuration"s].get("description"s)),
-                  unquote(ini["configuration"s].get("author"s)), unquote(ini["configuration"s].get("version"s)), unquote(ini["configuration"s].get("link"s)), loader, entry.path().string(),
-                  libraryPath.string(), static_cast<unsigned int>(m_plugins.size() + 1));
-               m_plugins.push_back(plugin);
-               callback(*plugin);
-            }
+            pluginDirs.push_back(entry);
          }
+      }
+   }
+
+   // modify the vector and make sure "pinmame" is first plugin we load as others depend on it
+   std::ranges::sort(pluginDirs, [](const std::filesystem::directory_entry& a, const std::filesystem::directory_entry& b)
+   {
+      if (a.path().filename() == "pinmame") return true;
+      if (b.path().filename() == "pinmame") return false;
+      return a.path().filename() < b.path().filename();
+   });
+
+   for (const auto& entry : pluginDirs)
+   {
+      mINI::INIStructure ini;
+      mINI::INIFile file((entry.path() / "plugin.cfg").string());
+      if (file.read(ini) && ini.has("configuration"s) && ini["configuration"s].has("id"s) && ini.has("libraries"s) && ini["libraries"s].has(libraryKey))
+      {
+         std::string id = unquote(ini["configuration"s]["id"s]);
+         for (auto it = m_plugins.begin(); it != m_plugins.end(); ++it)
+            if ((*it)->m_id == id)
+               it = m_plugins.erase(it);
+         const std::string libraryFile = unquote(ini["libraries"s][libraryKey]);
+         const std::string libraryPath = (entry.path() / libraryFile).string();
+         if (!std::filesystem::exists(libraryPath))
+         {
+            PLOGE << "Plugin " << id << " has an invalid library reference to a missing file for " << libraryKey << ": " << libraryFile;
+            continue;
+         }
+         std::shared_ptr<MsgPlugin> plugin = std::make_shared<MsgPlugin>(id, unquote(ini["configuration"s].get("name"s)), unquote(ini["configuration"s].get("description"s)),
+            unquote(ini["configuration"s].get("author"s)), unquote(ini["configuration"s].get("version"s)), unquote(ini["configuration"s].get("link"s)), loader, entry.path().string(), libraryPath,
+            m_nextEndpointId++);
+         m_plugins.push_back(plugin);
+         callback(*plugin);
       }
    }
 }

@@ -64,7 +64,7 @@ static int OnRender(VPXRenderContext2D* ctx, void*)
       {
          // Load default layouts provided with plugin
          std::filesystem::path path;
-         #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__)
+         #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__) || defined(__RK3588__)
          VPXInfo vpxInfo;
          vpxApi->GetVpxInfo(&vpxInfo);
          path = std::filesystem::path(vpxInfo.path) / "plugins"sv / "scoreview"sv;

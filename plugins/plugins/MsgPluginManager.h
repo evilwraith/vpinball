@@ -174,6 +174,7 @@ private:
    std::function<void*(void*, const std::string&)> m_dllGetMethod;
 
    std::thread::id m_apiThread;
+   uint32_t m_nextEndpointId = 1;
 };
 
 }

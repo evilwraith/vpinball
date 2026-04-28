@@ -33,11 +33,11 @@ Record &operator<<(Record &record, const ImVec2 &pt) { return record << '(' << p
 }
 
 LiveUI::LiveUI(RenderDevice *const rd)
-   : m_ballControl(*this) 
-   , m_inGameUI(*this)
-   , m_perfUI(g_pplayer)
+   : m_inGameUI(*this) 
    , m_editorUI(*this)
+   , m_ballControl(*this)
    , m_rd(rd)
+   , m_perfUI(g_pplayer)
 {
    m_player = g_pplayer;
    m_pininput = &(m_player->m_pininput);
@@ -225,7 +225,7 @@ void LiveUI::UpdateScale()
       // For cabinet mode, the user is not standing in front of screen, so scale out the UI based on display size to be more readable (more "game like")
       if (m_player->m_ptable->GetViewMode() == ViewSetupID::BG_FULLSCREEN)
       {
-         m_uiScale = max(m_uiScale, static_cast<float>(min(m_player->m_playfieldWnd->GetWidth(), m_player->m_playfieldWnd->GetHeight())) / 750.f);
+         m_uiScale = max(m_uiScale, static_cast<float>(m_player->m_playfieldWnd->GetWidth()) / 750.f);
       }
    }
    m_uiScale = min(m_uiScale, 10.f); // To avoid texture size overflows
@@ -308,6 +308,19 @@ void LiveUI::NewFrame()
       io.DisplayFramebufferScale.x = io.DisplayFramebufferScale.y;
       io.DisplayFramebufferScale.y = scale;
    }
+#if defined(__RK3588__)
+   {
+      static int s_logCount = 0;
+      if (s_logCount < 5)
+      {
+         PLOGI << "LiveUI RK3588: rt=" << width << "x" << height
+               << " display=" << io.DisplaySize.x << "x" << io.DisplaySize.y
+               << " scale=" << io.DisplayFramebufferScale.x << "," << io.DisplayFramebufferScale.y
+               << " rotate=" << m_rotate;
+         ++s_logCount;
+      }
+   }
+#endif
 
    // Enable mouse capture when dragging (needed when dragging main windows)
    {
@@ -429,9 +442,26 @@ void LiveUI::RenderUI()
    }
 
    // Update meshes and renders
-   const Matrix3D matRotate = Matrix3D::MatrixRotateZ(static_cast<float>(m_rotate * (M_PI / 2.0)));
+#if defined(__RK3588__)
+   const int renderRotate = 0;
+#else
+   const int renderRotate = m_rotate;
+#endif
+   const Matrix3D matRotate = Matrix3D::MatrixRotateZ(static_cast<float>(renderRotate * (M_PI / 2.0)));
    Matrix3D matTranslate;
-   switch (m_rotate)
+#if defined(__RK3588__)
+   const float rtWidth = static_cast<float>(width);
+   const float rtHeight = static_cast<float>(height);
+   switch (renderRotate)
+   {
+   case 0: matTranslate = Matrix3D::MatrixIdentity(); break;
+   case 1: matTranslate = Matrix3D::MatrixTranslate(rtWidth, 0, 0); break;
+   case 2: matTranslate = Matrix3D::MatrixTranslate(rtWidth, rtHeight, 0); break;
+   case 3: matTranslate = Matrix3D::MatrixTranslate(0, rtHeight, 0); break;
+   default: assert(false); return;
+   }
+#else
+   switch (renderRotate)
    {
    case 0: matTranslate = Matrix3D::MatrixIdentity(); break;
    case 1: matTranslate = Matrix3D::MatrixTranslate(io.DisplaySize.y, 0, 0); break;
@@ -439,8 +469,14 @@ void LiveUI::RenderUI()
    case 3: matTranslate = Matrix3D::MatrixTranslate(0, io.DisplaySize.x, 0); break;
    default: assert(false); return;
    }
-   const float right = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.y : io.DisplaySize.x;
-   const float bottom = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.x : io.DisplaySize.y;
+#endif
+#if defined(__RK3588__)
+   const float right = static_cast<float>(width);
+   const float bottom = static_cast<float>(height);
+#else
+   const float right = (renderRotate == 1 || renderRotate == 3) ? io.DisplaySize.y : io.DisplaySize.x;
+   const float bottom = (renderRotate == 1 || renderRotate == 3) ? io.DisplaySize.x : io.DisplaySize.y;
+#endif
    const Matrix3D matProj = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, bottom, 0.f, 0.f, 1.f);
    m_rd->m_uiShader->SetMatrix(SHADER_matWorldView, &matProj);
    m_rd->m_uiShader->SetVector(SHADER_staticColor_Alpha,
@@ -459,6 +495,51 @@ void LiveUI::RenderUI()
    m_rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
    m_rd->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
    m_rd->m_uiShader->SetTechnique(SHADER_TECHNIQUE_LiveUI);
+#if defined(__RK3588__)
+   const float renderWidth = static_cast<float>(width);
+   const float renderHeight = static_cast<float>(height);
+   const float uiWidth = io.DisplaySize.x;
+   const float uiHeight = io.DisplaySize.y;
+   const float rotatedWidth = (m_rotate == 1 || m_rotate == 3) ? uiHeight : uiWidth;
+   const float rotatedHeight = (m_rotate == 1 || m_rotate == 3) ? uiWidth : uiHeight;
+   const float renderScale = std::min(renderWidth / rotatedWidth, renderHeight / rotatedHeight);
+   const float rotW = rotatedWidth * renderScale;
+   const float rotH = rotatedHeight * renderScale;
+   const float offsetX = (renderWidth - rotW) * 0.5f;
+   const float offsetY = (renderHeight - rotH) * 0.5f;
+   auto rotatePos = [&](const float x, const float y, float &outX, float &outY)
+   {
+      const float sx = x * renderScale;
+      const float sy = y * renderScale;
+      switch (m_rotate)
+      {
+      case 0: outX = sx; outY = sy; break;
+      case 1: outX = rotW - sy; outY = sx; break;
+      case 2: outX = rotW - sx; outY = rotH - sy; break;
+      case 3: outX = sy; outY = rotH - sx; break;
+      default: outX = sx; outY = sy; break;
+      }
+      outX += offsetX;
+      outY += offsetY;
+   };
+   auto rotateClip = [&](const ImVec4 &clip)
+   {
+      ImVec2 p0(clip.x, clip.y);
+      ImVec2 p1(clip.z, clip.y);
+      ImVec2 p2(clip.x, clip.w);
+      ImVec2 p3(clip.z, clip.w);
+      float x0, y0, x1, y1, x2, y2, x3, y3;
+      rotatePos(p0.x, p0.y, x0, y0);
+      rotatePos(p1.x, p1.y, x1, y1);
+      rotatePos(p2.x, p2.y, x2, y2);
+      rotatePos(p3.x, p3.y, x3, y3);
+      const float minX = std::min(std::min(x0, x1), std::min(x2, x3));
+      const float minY = std::min(std::min(y0, y1), std::min(y2, y3));
+      const float maxX = std::max(std::max(x0, x1), std::max(x2, x3));
+      const float maxY = std::max(std::max(y0, y1), std::max(y2, y3));
+      return ImVec4(minX, minY, maxX, maxY);
+   };
+#endif
    if (static_cast<int>(m_meshBuffers.size()) < draw_data->CmdListsCount)
       m_meshBuffers.resize(draw_data->CmdListsCount);
    int depthSort = -10000;
@@ -482,8 +563,15 @@ void LiveUI::RenderUI()
          for (unsigned int i = 0; i < numVertices; i++)
          {
             const uint32_t rgba = cmd_list->VtxBuffer[i].col;
+#if defined(__RK3588__)
+            float rx, ry;
+            rotatePos(cmd_list->VtxBuffer[i].pos.x, cmd_list->VtxBuffer[i].pos.y, rx, ry);
+            vb[i].x = rx;
+            vb[i].y = ry;
+#else
             vb[i].x = cmd_list->VtxBuffer[i].pos.x;
             vb[i].y = cmd_list->VtxBuffer[i].pos.y;
+#endif
             vb[i].z = (float)((rgba >> 24) & 0xFFu) * (float)(1.0 / 255.0); // alpha
             vb[i].nx = (float)(rgba & 0x000000FFu) * (float)(1.0 / 255.0); // red
             vb[i].ny = (float)(rgba & 0x0000FF00u) * (float)(1.0 / 65280.0); // green
@@ -503,7 +591,12 @@ void LiveUI::RenderUI()
       {
          if (cmd->ElemCount != 0)
          {
+#if defined(__RK3588__)
+            const ImVec4 clip = (m_rotate == 0) ? cmd->ClipRect : rotateClip(cmd->ClipRect);
+            m_rd->m_uiShader->SetVector(SHADER_clip_plane, clip.x, clip.y, clip.z, clip.w);
+#else
             m_rd->m_uiShader->SetVector(SHADER_clip_plane, cmd->ClipRect.x, cmd->ClipRect.y, cmd->ClipRect.z, cmd->ClipRect.w);
+#endif
             m_rd->m_uiShader->SetTexture(SHADER_tex_base_color, cmd->GetTexID());
             m_rd->DrawMesh(m_rd->m_uiShader, true, Vertex3Ds(), static_cast<float>(depthSort), m_meshBuffers[n], RenderDevice::TRIANGLELIST, cmd->IdxOffset, cmd->ElemCount);
             depthSort--;

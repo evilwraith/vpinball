@@ -20,6 +20,7 @@
 #include <codecvt>
 
 #ifdef __STANDALONE__
+#include <SDL3/SDL_filesystem.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <filesystem>
 #endif
@@ -251,6 +252,21 @@ int main(int argc, const char** argv) {
    sigIntHandler.sa_flags = 0;
    sigaction(SIGINT, &sigIntHandler, nullptr);
 #endif
+
+   #ifdef __RK3588__
+   const char* base_path = SDL_GetBasePath();
+   if (base_path)
+   {
+      std::string ld_lib_path = base_path;
+      char* env_path = getenv("LD_LIBRARY_PATH");
+      if (env_path)
+      {
+         ld_lib_path += ":";
+         ld_lib_path += env_path;
+      }
+      setenv("LD_LIBRARY_PATH", ld_lib_path.c_str(), 1);
+   }
+   #endif
 
    g_argc = argc;
    g_argv = argv;

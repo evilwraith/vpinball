@@ -72,7 +72,9 @@ void ViewSetup::SetWindowAutofit(const PinTable* const table, const vec3& player
    }
    else
    {
-      glassNotification(std::format("Missing glass position guessed to be {:.2f}cm / {:.2f}cm", VPUTOCM(bottomHeight), VPUTOCM(topHeight)));
+      char buf[256];
+      snprintf(buf, sizeof(buf), "Missing glass position guessed to be %.2fcm / %.2fcm", VPUTOCM(bottomHeight), VPUTOCM(topHeight));
+      glassNotification(string(buf));
    }
 
    // Reset rotation against screen orientation

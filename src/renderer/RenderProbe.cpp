@@ -294,6 +294,9 @@ void RenderProbe::PreRenderStaticReflectionProbe()
    //#define STATIC_PRERENDER_ITERATIONS_KOROBOV 7.0 // for the (commented out) lattice-based QMC oversampling, 'magic factor', depending on the the number of iterations!
    // loop for X times and accumulate/average these renderings
    // NOTE: iter == 0 MUST ALWAYS PRODUCE an offset of 0,0!
+#if defined(__RK3588__)
+   m_rd->SetPrerenderMode(true);
+#endif
    const unsigned int nTris = m_rd->m_curDrawnTriangles;
    const int n_iter = STATIC_PRERENDER_ITERATIONS - 1;
    for (int iter = n_iter; iter >= 0; --iter) // just do one iteration if in dynamic camera/light/material tweaking mode
@@ -341,6 +344,9 @@ void RenderProbe::PreRenderStaticReflectionProbe()
 
       m_rd->SubmitRenderFrame(); // Submit to avoid stacking up all prerender passes in a huge render frame
    }
+#if defined(__RK3588__)
+   m_rd->SetPrerenderMode(false);
+#endif
    m_rd->m_curDrawnTriangles += nTris;
 
    // copy back weighted antialiased color result to the static render target, keeping depth untouched

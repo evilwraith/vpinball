@@ -40,8 +40,13 @@ void PerfUI::Update()
 {
    if (m_showPerf == PerfMode::PM_DISABLED)
       return;
-   
-   ImGui::PushFont(nullptr, min(13.0f * m_uiScale, ImGui::GetIO().DisplaySize.x / 60.f));
+
+#if defined(__RK3588__)
+   const float perfScale = m_uiScale * 3.0f;
+#else
+   const float perfScale = m_uiScale;
+#endif
+   ImGui::PushFont(nullptr, min(13.0f * perfScale, ImGui::GetIO().DisplaySize.x / 60.f));
    
    RenderFPS();
 
@@ -54,10 +59,15 @@ void PerfUI::Update()
 void PerfUI::RenderFPS()
 {
    const ImGuiIO &io = ImGui::GetIO();
+#if defined(__RK3588__)
+   const float perfScale = m_uiScale * 3.0f;
+#else
+   const float perfScale = m_uiScale;
+#endif
    constexpr ImGuiWindowFlags window_flags
       = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
    if (m_player->m_vrDevice == nullptr)
-      ImGui::SetNextWindowPos(ImVec2(8.f * m_uiScale, io.DisplaySize.y - 8.f * m_uiScale), 0, ImVec2(0.f, 1.f));
+      ImGui::SetNextWindowPos(ImVec2(8.f * perfScale, io.DisplaySize.y - 8.f * perfScale), 0, ImVec2(0.f, 1.f));
    else if (m_showPerf == PerfMode::PM_STATS) // VR with stats
       ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.25f, io.DisplaySize.y * 0.35f), 0, ImVec2(0.f, 0.f));
    else // VR without stats
@@ -86,10 +96,6 @@ void PerfUI::RenderFPS()
       #endif
       if (m_player->m_renderProfiler->GetPrev(FrameProfiler::PROFILE_FRAME) > m_player->m_renderer->m_renderDevice->GetTargetFrameLength() + 500)
          color = IM_COL32(255, 0, 0, 128); // Red dot when missing target refresh rate
-      else if (m_player->m_lastFrameSyncOnVBlank)
-         color = IM_COL32(0, 255, 0, 128); // Green when using VSync
-      else
-         color = IM_COL32(0, 192, 255, 128); // Cyan when using sfotware display sync
       ImGui::GetWindowDrawList()->AddCircleFilled(
          ImGui::GetCursorScreenPos() + ImVec2(ImGui::GetWindowWidth() - 5.f * m_uiScale - 2.f * ImGui::GetStyle().WindowPadding.x, ImGui::GetTextLineHeight() * 0.5f),
          5.f * m_uiScale, color);
@@ -101,7 +107,21 @@ void PerfUI::RenderFPS()
    {
       const double frameLength = m_player->m_renderProfiler->GetSlidingAvg(FrameProfiler::PROFILE_FRAME);
       const ImVec2 renderTextPos = ImGui::GetCursorScreenPos();
-      ImGui::Text("Render: %5.1ffps %4.1fms (%4.1fms)", 1e6 / frameLength, 1e-3 * frameLength, 1e-3 * m_player->m_renderProfiler->GetPrev(FrameProfiler::PROFILE_FRAME));
+      #ifdef ENABLE_BGFX
+         if (const float latency = 1000.f * m_player->m_renderer->m_renderDevice->GetVisualLatency(); latency > 0.f)
+         {
+            ImGui::Text("Render: %5.1ffps (Latency %4.1fms)", 1e6 / frameLength, latency);
+            ImGui::SameLine();
+            if (ImGui::IsMouseHoveringRect(renderTextPos, ImGui::GetCursorScreenPos() + ImVec2(0, ImGui::GetTextLineHeight())))
+               ImGui::SetTooltip(
+                  "Latency is an (imprecise) evaluation of the average finger to photon latency\nIt includes median input latency, rendering latency and estimated display latency");
+            ImGui::NewLine();
+         }
+         else
+            ImGui::Text("Render: %5.1ffps", 1e6 / frameLength);
+      #else
+         ImGui::Text("Render: %5.1ffps %4.1fms (%4.1fms)", 1e6 / frameLength, 1e-3 * frameLength, 1e-3 * m_player->m_renderProfiler->GetPrev(FrameProfiler::PROFILE_FRAME));
+      #endif
    }
 
    {
@@ -156,7 +176,7 @@ void PerfUI::RenderStats() const
       "Custom 3"s,
       // Render thread
       "Wait for frame"s, // PROFILE_RENDER_WAIT
-      "Wait GPU"s, // PROFILE_RENDER_WAIT_SC
+      "Wait for swapchain"s, // PROFILE_RENDER_WAIT_SC
       #ifdef ENABLE_BGFX
       "Submit BGFX"s, // PROFILE_RENDER_SUBMIT
       "Submit GPU"s, // PROFILE_RENDER_FLIP
@@ -259,8 +279,7 @@ void PerfUI::RenderStats() const
       #ifdef ENABLE_BGFX
       {
          const float height = blockHeight * 2.f - style.FramePadding.y;
-         const uint64_t gpuStart = min(m_player->m_renderProfiler->GetPrevEnd(FrameProfiler::PROFILE_RENDER_FLIP),
-            m_player->m_renderProfiler->GetPrevStart(FrameProfiler::PROFILE_RENDER_FLIP) + 300); // 300us is a magic number for the delay between submission start to GPU processing
+         const uint64_t gpuStart = m_player->m_renderProfiler->GetPrevStart(FrameProfiler::PROFILE_RENDER_FLIP);
          const uint64_t gpuEnd = gpuStart + m_player->m_renderer->m_renderDevice->m_lastGPUFrameLength;
          {
             const float start = static_cast<float>(gpuStart - minTS) / elapse;
@@ -314,20 +333,18 @@ void PerfUI::RenderStats() const
          PROF_ROW("> Wait Frame", FrameProfiler::PROFILE_RENDER_WAIT)
          PROF_ROW("> VPX -> BGFX", FrameProfiler::PROFILE_RENDER_SUBMIT)
          PROF_ROW("> BGFX -> GPU", FrameProfiler::PROFILE_RENDER_FLIP)
-         PROF_ROW("> Wait GPU", FrameProfiler::PROFILE_RENDER_WAIT_SC)
+         PROF_ROW("> Wait Swapchain", FrameProfiler::PROFILE_RENDER_WAIT_SC)
          PROF_ROW("> Sleep", FrameProfiler::PROFILE_RENDER_SLEEP)
          if (hoveredRow == 2)
-            ImGui::SetTooltip("Time spent waiting for the CPU to prepare a frame");
+            ImGui::SetTooltip("Time spent waiting for:\n- the CPU to prepare a frame\n- a swapchain slot to be free\n- anticipating part of the sync sleep to reduce latency");
          else if (hoveredRow == 3)
-            ImGui::SetTooltip("Time spent submiting frame from VPX to BGFX");
-         else if (hoveredRow == 4)
-            ImGui::SetTooltip("Time spent submiting frame from BGFX to GPU");
-         else if (hoveredRow == 5)
-            ImGui::SetTooltip("Time spent waiting for the GPU\n(for a free swapchain slot)");
-         else if (hoveredRow == 6)
             ImGui::SetTooltip("Time spent sleeping to match desired framerate");
-         logicRow = 7;
-         rowOffset = 3;
+         else if (hoveredRow == 4)
+            ImGui::SetTooltip("Time spent submiting frame from VPX to BGFX");
+         else if (hoveredRow == 5)
+            ImGui::SetTooltip("Time spent submiting frame from BGFX to GPU");
+         logicRow = 6;
+         rowOffset = 2;
 
          profiler = &m_player->m_logicProfiler;
          PROF_ROW("Logic Thread", FrameProfiler::PROFILE_FRAME)
@@ -378,6 +395,11 @@ void PerfUI::RenderStats() const
 void PerfUI::RenderPlots()
 {
    const ImGuiIO &io = ImGui::GetIO();
+#if defined(__RK3588__)
+   const float perfScale = m_uiScale * 3.0f;
+#else
+   const float perfScale = m_uiScale;
+#endif
    ImGuiWindowFlags window_flags_plots
       = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
    if (!m_player->m_renderer->m_vrApplyColorKey)
@@ -389,7 +411,7 @@ void PerfUI::RenderPlots()
    if (m_player->m_vrDevice)
       ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.80f, io.DisplaySize.y * 0.35f), 0, ImVec2(1.f, 0.f));
    else
-      ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 8.f * m_uiScale, io.DisplaySize.y - 8.f * m_uiScale), 0, ImVec2(1.f, 1.f));
+      ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 8.f * perfScale, io.DisplaySize.y - 8.f * perfScale), 0, ImVec2(1.f, 1.f));
    ImGui::Begin("Plots", nullptr, window_flags_plots);
 
    const float t = static_cast<float>(m_player->m_time_sec);

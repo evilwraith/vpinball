@@ -12,6 +12,7 @@ PropBool(Player, PlayMusic, "Enable Backglass"s, "Enable/Disable backglass game 
 PropBoolBase(Player, PlaySound, "Enable Playfield"s, "Enable/Disable playfield mechanical sounds"s, false, true); // We use the complete macro as Win32 global PlaySound would conflict otherwise
 PropStringDyn(Player, SoundDeviceBG, "Backglass Sound Device"s, "Select backglass sound device"s, ""s);
 PropStringDyn(Player, SoundDevice, "Playfield Sound Device"s, "Select playfield sound device"s, ""s);
+PropStringDyn(Player, AlsaDefaultPlaybackDevice, "ALSA Playback PCM"s, "Optional ALSA PCM name used when opening the playfield through SDL's default playback device"s, ""s);
 PropEnum(Player, Sound3D, "Playfield Output Mode"s, "Select how playfield sound is output to a speaker configuration"s, int /* VPX::SoundConfigTypes*/, 0 /* VPX::SoundConfigTypes::SNDCFG_SND3D2CH */,
    "2 Front channels"s, "2 Rear channels"s, "Up to 6 channels. Rear at lockbar"s, "Up to 6 channels. Front at lockbar"s, "6ch Side & Rear at lockbar. Legacy mixing"s, "6ch Side & Rear at lockbar. New mixing"s);
 
@@ -118,6 +119,9 @@ PropFloat(Player, MaxFramerate, "Limit Framerate"s,
    "-1 will limit FPS to the display refresh rate\n0 will not limit the display refresh rate\nOther values will limit the FPS to it (energy saving/less heat, framerate stability)"s, -1.f,
    1000.f, -1.f);
 PropInt(Player, MaxPrerenderedFrames, "Max. Prerendered Frames"s, "Maximum number of 'frames in flight' (frames pushed to the GPU queue waiting for rendering).\nHigher values may lead to higher FPS, but at higher input latency.\nRecommended to be adjusted to the lowest value that allows a stable framerate"s, 1, 3, 1);
+PropInt(Player, VisualLatencyCorrection, "Visual Latency Correction"s,
+   "Leave at -1 to get default latency correction based on display frequency.\nIf you measured your setup latency using tools like Intel's PresentMon, enter the average latency in ms."s,
+   -1, 200, -1);
 
 // Graphics settings
 #if defined(ENABLE_BGFX)
