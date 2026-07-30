@@ -26,7 +26,18 @@ OPENXR_SHA=b15ef6ce120dad1c7d3ff57039e73ba1a9f17102
 LIBDMDUTIL_SHA=da00021340ed41875036d0622f0f22b09a11349d
 LIBALTSOUND_SHA=f4b790a19ae45a9f93ae0051df6933800c7a6446
 LIBDOF_SHA=eef645d9f5df618290962946c9e3e8ed30886639
-FFMPEG_SHA=38b88335f99e76ed89ff3c93f877fdefce736c13
+# VPINBALL/4kp: FFmpeg comes from nyanmisaka/ffmpeg-rockchip, not FFmpeg/FFmpeg, and is built
+# against rkmpp + rkrga so the RK3588 hardware video path exists at all (h264_rkmpp / hevc_rkmpp
+# decoders and encoders, and RGA/im2d colour conversion). Stock FFmpeg has none of it. The cabinets
+# keep hardware decode OFF by default -- librockchip_mpp has crashed -- but RGA colour convert and
+# the encoders are wanted, and neither is reachable without this build.
+FFMPEG_REPO=nyanmisaka/ffmpeg-rockchip
+FFMPEG_SHA=388741a3544b92cf525f1cb3746ba9fb8f301d9a
+FFMPEG_PATCHSET=rkmpp-rkrga-001
+RKMPP_REPO=https://gitee.com/nyanmisaka/mpp.git
+RKMPP_BRANCH=develop
+RKRGA_REPO=https://gitee.com/nyanmisaka/rga.git
+RKRGA_BRANCH=jellyfin-rga
 LIBWINEVBS_SHA=bcc790e58d394b282c327feca2a7c921ca022e8d
 LIBZIP_SHA=6f8a0cdd24a0dc6cce9dac4a7679da784ab124ea
 

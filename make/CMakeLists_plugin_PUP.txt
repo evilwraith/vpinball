@@ -215,6 +215,17 @@ if(BUILD_SHARED AND NOT (PLATFORM STREQUAL "windows" AND NOT MSVC))
             COMMAND cp -a "${RUNTIME_LIBS_DIR}/libpupdmd.so" "${PLUGINS_DIR}/pup/"
             COMMAND cp -a "${RUNTIME_LIBS_DIR}/libpupdmd.so.*" "${PLUGINS_DIR}/pup/"
          )
+         # VPINBALL/4kp: ffmpeg-rockchip LINKS rkmpp and rkrga (they are NEEDED entries, not
+         # dlopened), and libavcodec here has RUNPATH=$ORIGIN, so without these beside it the whole
+         # PUP plugin fails to load -- not merely losing hardware decode.
+         if(BUILD_RK3588)
+            add_custom_command(TARGET PUPPlugin POST_BUILD
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librockchip_mpp.so" "${PLUGINS_DIR}/pup/"
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librockchip_mpp.so.*" "${PLUGINS_DIR}/pup/"
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librga.so" "${PLUGINS_DIR}/pup/"
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librga.so.*" "${PLUGINS_DIR}/pup/"
+            )
+         endif()
       endif()
    endif()
 endif()

@@ -16,7 +16,7 @@ echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
 echo "  LIBALTSOUND_SHA: ${LIBALTSOUND_SHA}"
 echo "  LIBDOF_SHA: ${LIBDOF_SHA}"
-echo "  FFMPEG_SHA: ${FFMPEG_SHA}"
+echo "  FFMPEG_SHA: ${FFMPEG_SHA} (${FFMPEG_REPO}, ${FFMPEG_PATCHSET})"
 echo "  LIBZIP_SHA: ${LIBZIP_SHA}"
 echo "  LIBWINEVBS_SHA: ${LIBWINEVBS_SHA}"
 echo ""
@@ -359,27 +359,77 @@ fi
 # build ffmpeg
 #
 
-FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}"
+# VPINBALL/4kp: ffmpeg-rockchip, built against rkmpp (hardware codecs) and rkrga (2D/colour
+# convert). Both are built from source here because no distro package supplies them for this SoC.
+# The prefix is local to this dependency dir so nothing leaks into the host toolchain, and the
+# rkmpp/rkrga runtime libs ship in the cart alongside the libav* ones -- ffmpeg dlopens neither, it
+# links them, so omitting them makes VPX fail to start rather than merely lose hardware decode.
+FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}-${FFMPEG_PATCHSET}"
 FFMPEG_FOUND_SHA="$([ -f ffmpeg/cache.txt ] && cat ffmpeg/cache.txt || echo "")"
 
 if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
-   echo "Building ffmpeg. Expected: ${FFMPEG_EXPECTED_SHA}, Found: ${FFMPEG_FOUND_SHA}"
+   echo "Building ffmpeg-rockchip. Expected: ${FFMPEG_EXPECTED_SHA}, Found: ${FFMPEG_FOUND_SHA}"
 
    rm -rf ffmpeg
    mkdir ffmpeg
    cd ffmpeg
 
-   curl -sL https://github.com/FFmpeg/FFmpeg/archive/${FFMPEG_SHA}.tar.gz -o FFmpeg-${FFMPEG_SHA}.tar.gz
-   tar xzf FFmpeg-${FFMPEG_SHA}.tar.gz
-   mv FFmpeg-${FFMPEG_SHA} ffmpeg
+   RK_PREFIX="$(pwd)/rk-prefix"
+   mkdir -p "${RK_PREFIX}"
+
+   git clone -q -b "${RKMPP_BRANCH}" --depth=1 "${RKMPP_REPO}" rkmpp
+   cmake \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -DBUILD_SHARED_LIBS=ON \
+      -DBUILD_TEST=OFF \
+      -DCMAKE_INSTALL_PREFIX="${RK_PREFIX}" \
+      -B rkmpp_build \
+      -S rkmpp
+   cmake --build rkmpp_build -- -j${NUM_PROCS}
+   cmake --install rkmpp_build
+
+   git clone -q -b "${RKRGA_BRANCH}" --depth=1 "${RKRGA_REPO}" rkrga
+   meson setup rkrga rkrga_build \
+      --buildtype=$(echo "${BUILD_TYPE}" | tr '[:upper:]' '[:lower:]') \
+      --default-library=shared \
+      --prefix="${RK_PREFIX}" \
+      --libdir=lib \
+      -Dcpp_args=-fpermissive \
+      -Dlibdrm=false \
+      -Dlibrga_demo=false
+   ninja -C rkrga_build
+   ninja -C rkrga_build install
+
+   curl -sL "https://github.com/${FFMPEG_REPO}/archive/${FFMPEG_SHA}.tar.gz" -o ffmpeg-${FFMPEG_SHA}.tar.gz
+   tar xzf ffmpeg-${FFMPEG_SHA}.tar.gz
+   # The archive's top-level dir is named after the repo, which is not FFmpeg here.
+   mv ffmpeg-rockchip-${FFMPEG_SHA} ffmpeg 2>/dev/null || mv FFmpeg-${FFMPEG_SHA} ffmpeg
    cd ffmpeg
-   LDFLAGS=-Wl,-rpath,\''$$$$ORIGIN'\' ./configure \
+   PKG_CONFIG_PATH="${RK_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+   CFLAGS="${CFLAGS:-} -I${RK_PREFIX}/include" \
+   LDFLAGS="${LDFLAGS:-} -L${RK_PREFIX}/lib -Wl,-rpath,"\''$$$$ORIGIN'\' ./configure \
       --enable-shared \
+      --enable-neon \
+      --arch=aarch64 \
+      --enable-rkmpp \
+      --enable-rkrga \
+      --enable-version3 \
+      --enable-libdrm \
       --disable-static \
       --disable-programs \
-      --disable-doc
+      --disable-doc \
+      --enable-small
    make -j${NUM_PROCS}
    cd ..
+
+   # Fail loudly rather than shipping a cart that silently lost the hardware path: configure will
+   # happily drop --enable-rkmpp if pkg-config cannot see rockchip_mpp, and the only symptom would be
+   # software decode on the device. Check the built library, not the configure flags.
+   if ! strings ffmpeg/libavcodec/libavcodec.so | grep -q "h264_rkmpp"; then
+      echo "ERROR: ffmpeg built without the rkmpp codecs. Check that rockchip_mpp and librga are" >&2
+      echo "       visible to pkg-config under ${RK_PREFIX}/lib/pkgconfig." >&2
+      exit 1
+   fi
 
    echo "$FFMPEG_EXPECTED_SHA" > cache.txt
 
@@ -514,6 +564,14 @@ for LIB in libavcodec libavdevice libavfilter libavformat libavutil libswresampl
    mkdir -p ../../../third-party/include/${LIB}
    cp ffmpeg/ffmpeg/${LIB}/*.h ../../../third-party/include/${LIB}
 done
+
+# ffmpeg-rockchip links rkmpp and rkrga, so they must ride in the cart too.
+cp -a ffmpeg/rk-prefix/lib/librockchip_mpp.so* ../../../third-party/runtime-libs/linux-aarch64
+cp -a ffmpeg/rk-prefix/lib/librga.so*          ../../../third-party/runtime-libs/linux-aarch64
+rm -rf ../../../third-party/include/rga
+mkdir -p ../../../third-party/include/rga
+cp -a ffmpeg/rkrga/include/*.h    ../../../third-party/include/rga
+cp -a ffmpeg/rkrga/im2d_api/*.h   ../../../third-party/include/rga
 
 cp -a libzip/libzip/build/lib/libzip.{so,so.*} ../../../third-party/runtime-libs/linux-aarch64
 cp libzip/libzip/build/zipconf.h ../../../third-party/include

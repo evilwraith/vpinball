@@ -254,6 +254,16 @@ if(BUILD_SHARED)
             COMMAND cp -a "${RUNTIME_LIBS_DIR}/libswscale.so" "${PLUGINS_DIR}/flexdmd/"
             COMMAND cp -a "${RUNTIME_LIBS_DIR}/libswscale.so.*" "${PLUGINS_DIR}/flexdmd/"
          )
+         # VPINBALL/4kp: see the PUP plugin -- ffmpeg-rockchip links rkmpp/rkrga and libavcodec has
+         # RUNPATH=$ORIGIN, so the plugin will not load at all without them beside it.
+         if(BUILD_RK3588)
+            add_custom_command(TARGET FlexDMDPlugin POST_BUILD
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librockchip_mpp.so" "${PLUGINS_DIR}/flexdmd/"
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librockchip_mpp.so.*" "${PLUGINS_DIR}/flexdmd/"
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librga.so" "${PLUGINS_DIR}/flexdmd/"
+               COMMAND cp -a "${RUNTIME_LIBS_DIR}/librga.so.*" "${PLUGINS_DIR}/flexdmd/"
+            )
+         endif()
       endif()
    endif()
 endif()
