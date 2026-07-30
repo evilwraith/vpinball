@@ -12,6 +12,8 @@
 #include "core/AppCommands.h"
 #include "core/VPApp.h"
 
+#include "standalone/vpx_ready_signal.h"
+
 #include "ui/win/resource.h"
 #include <initguid.h>
 
@@ -179,6 +181,9 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
 
    Logger::Init();
 
+   // Must run before anything can fork/exec a helper (B2S, VPinMAME, PUP), so the launcher's fd is
+   // not inherited by it. No-op when not launched by go-vpx-launcher.
+   vpx_ready_signal_init();
 
    int retval = 0;
    try

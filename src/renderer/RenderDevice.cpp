@@ -27,6 +27,7 @@
 #include "RenderCommand.h"
 #include "Shader.h"
 #include "VRDevice.h"
+#include "standalone/vpx_ready_signal.h"
 #ifdef __RK3588__
 #include "standalone/KmsBgfxPresenter.h"
 #include <unordered_map>
@@ -2363,6 +2364,11 @@ void RenderDevice::Flip()
       CaptureDX9Screenshot();
 
    #endif
+
+   // A frame is now actually on screen: tell the launcher we are up. Fired from the render thread
+   // right after the present, so we never signal a frame that has only been queued. Self-guarded,
+   // so calling it on every frame is free, and a no-op when not launched by go-vpx-launcher.
+   vpx_ready_signal_fire();
 }
 
 void RenderDevice::UploadAndSetSMAATextures()
