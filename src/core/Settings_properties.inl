@@ -1398,11 +1398,11 @@ PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 // 4kp/HDP only. Render the playfield below the panel's native resolution and let the display
 // controller (RK3588 VOP2) upscale it at scanout. That removes a full-resolution GPU pass and stops
 // the GPU writing a 4K surface every frame; the cost is a softer image, including the in-game menus.
-// Names and section match the 10.8.0 fork so per-table vpxFile.ini values carry over unchanged.
-PropBool(Standalone, 4kpPlaneScale, "Scale the playfield at scanout"s,
-   "Render the playfield smaller and let the display controller upscale it. RK3588 only."s, false);
+// Section and names match the 10.8.0 fork so per-table vpxFile.ini values carry over unchanged.
+// A value below 1 enables it -- there is no separate on/off flag.
 PropFloatStepped(Standalone, BackBufferScale, "Playfield render scale"s,
-   "Fraction of the panel resolution the playfield is rendered at when scanout scaling is enabled."s,
+   "Fraction of the panel resolution the playfield is rendered at. Below 1, the display controller "
+   "upscales the result to fill the panel."s,
    0.25f, 1.0f, 0.05f, 1.0f);
 PropBool(Standalone, ForceBackBufferScale, "Force playfield render scale"s,
    "Apply the render scale even on a non-4K playfield, where it would otherwise be ignored."s, false);

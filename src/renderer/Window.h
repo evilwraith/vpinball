@@ -96,7 +96,7 @@ public:
 
    bool IsPositioningSupported() const { return m_isPositioningSupported; } // If false, GetPos/GetPixelPos/SetPos/SetPixelPos will all fail, thanks Wayland
    // The panel's real size. Equals GetPixelWidth/Height unless the scanout buffer was deliberately
-   // made smaller (4kpPlaneScale), in which case those return BUFFER pixels and these the panel.
+   // made smaller (BackBufferScale < 1), in which case those return BUFFER pixels and these the panel.
    // <1 when the scanout buffer is smaller than the panel and the display controller upscales it.
    // Anything sized from PANEL dimensions but drawn into the buffer must be multiplied by this, or
    // it lands upscaled on screen.

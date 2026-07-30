@@ -14,14 +14,15 @@ namespace
 // the renderer's pixel size are both derived from it and are set far apart; if they ever disagree the
 // GPU renders at one size into a buffer of another, which does not fail, it just looks wrong.
 //
+// A scale below 1 IS the switch. There is deliberately no separate enable flag: the display
+// controller doing the upscale is the only implementation here, so a boolean could only ever have
+// gated the float, and a setting whose sole effect is to permit another setting is a trap.
+//
 // Rendering below native and letting the display controller upscale is only a sensible trade on the
 // 4K playfield. On a 1080p panel the usual 0.5 would render 960x540, so the value is ignored there
 // (tables copied from an ALP4K carry it) unless Standalone/ForceBackBufferScale is set.
 float GetEffectiveBackBufferScale(const Settings& settings, const int panelWidth)
 {
-   if (!settings.GetStandalone_4kpPlaneScale())
-      return 1.0f;
-
    const float scale = settings.GetStandalone_BackBufferScale();
    if (scale >= 1.0f || scale <= 0.0f)
       return 1.0f;

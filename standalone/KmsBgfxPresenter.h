@@ -386,7 +386,7 @@ public:
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcW, dstW) < 0;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcH, dstH) < 0;
          // SRC is the BUFFER, not the mode. They are equal only when rendering at native resolution;
-         // under 4kpPlaneScale the buffer is deliberately smaller and VOP2 scales SRC->CRTC at
+         // under BackBufferScale < 1 the buffer is deliberately smaller and VOP2 scales SRC->CRTC at
          // scanout, which is the whole point (it deletes the GPU upscale pass and stops the GPU
          // writing a 4K surface). Hardcoding the mode here would tell the plane to read past the end
          // of a smaller buffer.
