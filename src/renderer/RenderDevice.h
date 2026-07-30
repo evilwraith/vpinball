@@ -150,6 +150,9 @@ public:
    // (live) RenderDevice state and operation API
 
    void Flip();
+   #if defined(ENABLE_BGFX) && defined(__RK3588__)
+   void PresentKmsWindows(); // VPX-owned DRM present; upstream has none on KMSDRM
+   #endif
    void WaitForVSync(const bool asynchronous);
    float GetVisualLatency() const; // Average delay between when the frame is prepared and when it will be viewed by the player (including TV/display/headset latency)
    float GetPredictedDisplayDelay() const; // Delay between now (when called) and when the frame will be viewed by the player (including TV/display/headset latency)

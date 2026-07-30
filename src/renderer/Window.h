@@ -76,6 +76,7 @@ public:
    int GetHeight() const { return m_height; }
    // Pixel units
    void GetPixelPos(int& x, int& y) const;
+   VPXWindowId GetWindowId() const { return m_windowId; }
    int GetPixelWidth() const { return m_pixelWidth; }
    int GetPixelHeight() const { return m_pixelHeight; }
    float GetPixelDensity() const { return m_pixelDensity; } // Logical size to pixels (e.g. a 1920x1080 logical size with 2.0 pixel density would have 3840x2160 pixels)

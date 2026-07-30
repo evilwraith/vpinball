@@ -27,6 +27,10 @@
 #include "RenderCommand.h"
 #include "Shader.h"
 #include "VRDevice.h"
+#ifdef __RK3588__
+#include "standalone/KmsBgfxPresenter.h"
+#include <unordered_map>
+#endif
 #include "renderer/AreaTex.h"
 #include "renderer/SearchTex.h"
 
@@ -2257,6 +2261,58 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 #endif
 
 // Schedule frame presentation (usually by flipping the front & back buffer)
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+// Upstream never presents on KMSDRM: SDL owns the gbm_surface, BGFX renders into it, and nothing
+// scans the front buffer out (see standalone/KmsBgfxPresenter.h). Drive one presenter per output
+// window from the render thread, right after BGFX has swapped, so the front buffer exists and the
+// EGL context is current for minting the IN_FENCE_FD.
+void RenderDevice::PresentKmsWindows()
+{
+   static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
+
+   for (VPX::Window* wnd : m_outputWnd)
+   {
+      SDL_Window* core = wnd ? wnd->GetCore() : nullptr;
+      if (core == nullptr)
+         continue;
+
+      VPX::Kms::WindowPresenter& presenter = s_presenters[core];
+      if (!presenter.IsReady())
+      {
+         const SDL_PropertiesID props = SDL_GetWindowProperties(core);
+         const int drmFd = (int)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_KMSDRM_DRM_FD_NUMBER, -1);
+         const uint32_t crtcId = (uint32_t)SDL_GetNumberProperty(props, "SDL.window.kmsdrm.crtc_id", 0);
+         struct gbm_surface* gs = (struct gbm_surface*)SDL_GetPointerProperty(props, "SDL.window.kmsdrm.gbm_surface", nullptr);
+         if (drmFd < 0 || crtcId == 0 || gs == nullptr)
+            continue;
+         if (!presenter.Init(drmFd, crtcId, gs, wnd->GetPixelWidth(), wnd->GetPixelHeight()))
+         {
+            PLOGE << "KMS presenter init failed for CRTC " << crtcId << " (no usable primary plane); this window will not display.";
+            continue;
+         }
+         PLOGI << "KMS presenter ready: CRTC " << crtcId << ' ' << wnd->GetPixelWidth() << 'x' << wnd->GetPixelHeight();
+      }
+      // Live, because it is re-read every frame: no window resize, no SDL geometry, no desktop
+      // coordinates. Identity by default (scale 1, offset 0), so an unconfigured window fills its
+      // panel exactly as before. Ported from the 10.8.0 fork's DMD window adjust model.
+      // Only the ancillary windows carry an adjustment -- matching the fork, where this is a DMD/
+      // backglass placement tool. The playfield has no entry in these property arrays, and the
+      // playfield is not something to shrink on a cabinet anyway.
+      const VPXWindowId wid = wnd->GetWindowId();
+      if (wid == VPXWindowId::VPXWINDOW_Backglass || wid == VPXWindowId::VPXWINDOW_ScoreView || wid == VPXWindowId::VPXWINDOW_Topper)
+      {
+         const Settings& setts = g_pplayer->m_ptable->m_settings;
+         presenter.SetAdjust(setts.GetWindow_Scale(wid), setts.GetWindow_OffsetX(wid), setts.GetWindow_OffsetY(wid));
+      }
+      else
+      {
+         presenter.SetAdjust(1.0f, 0, 0);
+      }
+      presenter.Present();
+   }
+}
+#endif
+
 void RenderDevice::Flip()
 {
    // The calls below may or may not block, depending on the device configuration and the state of its frame queue. The driver may also
@@ -2288,6 +2344,9 @@ void RenderDevice::Flip()
    // Schedule frame presentation (non blocking call, simply queueing the present command in the driver's render queue with a schedule for execution)
    #if defined(ENABLE_BGFX)
    SubmitAndFlipFrame(true);
+   #ifdef __RK3588__
+   PresentKmsWindows();
+   #endif
 
    #elif defined(ENABLE_OPENGL)
    SDL_GL_SwapWindow(m_outputWnd[0]->GetCore());

@@ -710,6 +710,17 @@ elseif(PLATFORM STREQUAL "linux")
       $<$<BOOL:${BUILD_RK3588}>:__RK3588__>
    )
 
+   # VPINBALL/4kp: the RK3588 build owns DRM presentation itself (standalone/KmsBgfxPresenter.h),
+   # because upstream never scans out the GBM front buffer on KMSDRM. Needs libdrm + gbm + EGL.
+   if(BUILD_RK3588)
+      find_package(PkgConfig REQUIRED)
+      pkg_check_modules(VPX_DRM REQUIRED libdrm)
+      pkg_check_modules(VPX_GBM REQUIRED gbm)
+      pkg_check_modules(VPX_EGL REQUIRED egl)
+      target_include_directories(vpinball PRIVATE ${VPX_DRM_INCLUDE_DIRS} ${VPX_GBM_INCLUDE_DIRS} ${VPX_EGL_INCLUDE_DIRS})
+      target_link_libraries(vpinball PUBLIC ${VPX_DRM_LIBRARIES} ${VPX_GBM_LIBRARIES} ${VPX_EGL_LIBRARIES})
+   endif()
+
    target_compile_options(vpinball PUBLIC
       $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:
          -fdenormal-fp-math=preserve-sign
