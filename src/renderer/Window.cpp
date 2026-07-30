@@ -6,6 +6,7 @@
 #include "core/VPApp.h"
 #include "parts/Collection.h"
 #include "renderer/Renderer.h"
+#include "standalone/MachineClass.h"
 
 #include <SDL3/SDL_video.h>
 
@@ -80,10 +81,34 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
    
    // Both fullscreen and windowed modes are anchored to a user selected display
    const string configuredDisplay = settings.GetWindow_Display((int)m_windowId);
-   const DisplayConfig selectedDisplay = GetDisplayConfig(configuredDisplay);
+   DisplayConfig selectedDisplay = GetDisplayConfig(configuredDisplay);
    if (configuredDisplay.empty())
    {
-      PLOGI << "No display configured. Using display \"" << selectedDisplay.displayName << "\".";
+      bool placedByRole = false;
+      #ifdef __RK3588__
+      // On the AtGames cabinets the panel order is not the role order: the ALP4K's display 0 is the
+      // playfield, but the HDP's display 0 is the BACKGLASS. Falling back to the primary display
+      // therefore puts the playfield on the wrong panel on the HDP. Resolve by role instead, which
+      // is what the fork does everywhere else (see standalone/MachineClass.h).
+      const VP::Machine::DisplayRole role
+         = m_windowId == VPXWindowId::VPXWINDOW_Playfield ? VP::Machine::DisplayRole::Playfield
+         : m_windowId == VPXWindowId::VPXWINDOW_Backglass ? VP::Machine::DisplayRole::Backglass
+         : m_windowId == VPXWindowId::VPXWINDOW_ScoreView ? VP::Machine::DisplayRole::DmdPanel
+         : m_windowId == VPXWindowId::VPXWINDOW_Topper    ? VP::Machine::DisplayRole::Topper
+                                                          : VP::Machine::DisplayRole::NoRole;
+      const int roleIndex = VP::Machine::GetRoleDisplayIndex(role);
+      const vector<DisplayConfig> allDisplays = GetDisplays();
+      if (roleIndex >= 0 && roleIndex < static_cast<int>(allDisplays.size()))
+      {
+         selectedDisplay = allDisplays[roleIndex];
+         placedByRole = true;
+         PLOGI << "No display configured. " << VP::Machine::Describe() << " places role '"
+               << VP::Machine::GetRoleName(role) << "' on display " << roleIndex << " \""
+               << selectedDisplay.displayName << "\".";
+      }
+      #endif
+      if (!placedByRole)
+         PLOGI << "No display configured. Using display \"" << selectedDisplay.displayName << "\".";
    }
    else if (selectedDisplay.displayName != configuredDisplay)
    {
