@@ -83,6 +83,19 @@ project(vpinball VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_REV}")
 
 message(STATUS "VPX build: RENDERER=${RENDERER} PLATFORM=${PLATFORM} ARCH=${ARCH}")
 
+# libstdc++ only gained <format> in GCC 13. Upstream CI builds on ubuntu-24.04-arm (GCC 13/14), but
+# the 4kp/HDP build host is Debian 12 (GCC 12), where the header does not exist. Put an fmtlib-backed
+# shim on the include path for every target (vpinball and all plugins) only when the toolchain has no
+# real <format>; on GCC 13+ this is a no-op and the standard header is used unchanged.
+include(CheckIncludeFileCXX)
+set(CMAKE_REQUIRED_FLAGS "-std=c++20")
+check_include_file_cxx(format VPX_HAVE_STD_FORMAT)
+unset(CMAKE_REQUIRED_FLAGS)
+if(NOT VPX_HAVE_STD_FORMAT)
+   message(STATUS "No libstdc++ <format>; using the fmtlib compatibility header")
+   include_directories(BEFORE "${CMAKE_SOURCE_DIR}/third-party/include/compat/cxx-format")
+endif()
+
 option(POST_BUILD_COPY_EXT_LIBS "Copy external libraries to build directory" ON)
 if(PLATFORM STREQUAL "macos")
    option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)

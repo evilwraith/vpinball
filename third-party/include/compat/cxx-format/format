@@ -1,0 +1,51 @@
+// std_compat/format -- <format> compatibility layer for toolchains without libstdc++'s <format>.
+//
+// libstdc++ only gained <format> in GCC 13. Upstream VPX CI builds on ubuntu-24.04-arm (GCC 13/14),
+// but the 4kp/HDP build host is Debian 12 (GCC 12), where the header does not exist at all.
+//
+// This directory is added to the include path ONLY when the compiler has no real <format>
+// (see the check_include_file_cxx(format ...) guard in CMakeLists.txt), so on a GCC 13+ host this
+// file is never reached and the standard header is used unchanged.
+//
+// Backed by fmtlib, which is the reference implementation std::format was standardised from, so the
+// format-spec grammar is identical. Only the subset VPX actually uses is re-exported; anything else
+// will fail to compile here rather than silently diverge from the standard.
+//
+// Deliberately NOT provided (add explicitly if upstream starts using them, do not blanket-export):
+//   std::formatter specialisations, std::format_to, std::format_to_n, std::formatted_size
+//
+// Bundled runtime is unaffected: this is a header-only compile-time shim, so the cart keeps
+// shipping the same prebuilt/libstdc++.so.6 it does today.
+
+#pragma once
+
+#if defined(__has_include)
+#  if __has_include(<version>)
+#    include <version>
+#  endif
+#endif
+
+#if defined(__cpp_lib_format)
+
+// A real <format> exists after all -- defer to it. (Should be unreachable given the CMake guard,
+// but keeps this header correct if it is ever put on the path unconditionally.)
+#  include_next <format>
+
+#else
+
+#  define FMT_HEADER_ONLY 1
+#  include <fmt/format.h>
+#  include <fmt/xchar.h>
+
+namespace std {
+
+using ::fmt::format;
+using ::fmt::vformat;
+using ::fmt::format_args;
+using ::fmt::make_format_args;
+using ::fmt::format_error;
+using ::fmt::format_string;
+
+} // namespace std
+
+#endif

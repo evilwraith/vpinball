@@ -9,6 +9,7 @@ echo "  SDL_SHA: ${SDL_SHA}"
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  SDL_TTF_SHA: ${SDL_TTF_SHA}"
 echo "  FREEIMAGE_SHA: ${FREEIMAGE_SHA}"
+echo "  FMT_SHA: ${FMT_SHA}"
 echo "  BGFX_CMAKE_VERSION: ${BGFX_CMAKE_VERSION}"
 echo "  BGFX_PATCH_SHA: ${BGFX_PATCH_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
@@ -21,6 +22,7 @@ echo "  LIBWINEVBS_SHA: ${LIBWINEVBS_SHA}"
 echo ""
 
 NUM_PROCS=$(nproc)
+VPX_PATCH_DIR="${VPX_PATCH_DIR:-$(cd "$(dirname "$0")/../.." && pwd)/vpx-patches}"
 
 mkdir -p "external/linux-aarch64/${BUILD_TYPE}"
 cd "external/linux-aarch64/${BUILD_TYPE}"
@@ -28,7 +30,7 @@ cd "external/linux-aarch64/${BUILD_TYPE}"
 #
 # build SDL3, SDL3_image, SDL3_ttf#
 
-SDL3_EXPECTED_SHA="${SDL_SHA}-${SDL_IMAGE_SHA}-${SDL_TTF_SHA}"
+SDL3_EXPECTED_SHA="${SDL_SHA}-${SDL_IMAGE_SHA}-${SDL_TTF_SHA}-${SDL_PATCHSET}"
 SDL3_FOUND_SHA="$([ -f SDL3/cache.txt ] && cat SDL3/cache.txt || echo "")"
 
 if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
@@ -38,9 +40,10 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
    mkdir SDL3
    cd SDL3
 
-   curl -sL https://github.com/libsdl-org/SDL/archive/${SDL_SHA}.tar.gz -o SDL-${SDL_SHA}.tar.gz
+   curl -sL https://github.com/${SDL_REPO}/archive/${SDL_SHA}.tar.gz -o SDL-${SDL_SHA}.tar.gz
    tar xzf SDL-${SDL_SHA}.tar.gz
    mv SDL-${SDL_SHA} SDL
+   ( cd SDL && patch -p1 < "${VPX_PATCH_DIR}/sdl3-kmsdrm-force-legacy-consistency.patch" )
    cd SDL
    cmake \
       -DSDL_SHARED=ON \
@@ -128,7 +131,7 @@ fi
 # build bgfx
 #
 
-BGFX_EXPECTED_SHA="${BGFX_CMAKE_VERSION}-${BGFX_PATCH_SHA}"
+BGFX_EXPECTED_SHA="${BGFX_CMAKE_VERSION}-${BGFX_PATCH_SHA}-${BGFX_PATCHSET}"
 BGFX_FOUND_SHA="$([ -f bgfx/cache.txt ] && cat bgfx/cache.txt || echo "")"
 
 if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
@@ -145,12 +148,23 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
    cd bgfx.cmake
    rm -rf bgfx
    mv ../bgfx-${BGFX_PATCH_SHA} bgfx
+   # FORK PATCH (4kp): KMSDRM/GBM EGL support, ported from evilwraith/bgfx@03f25e9 (4kp_fixes).
+   # That fork cannot be used wholesale: it lacks vbousquet's waitForSwapchain(), which VPX calls
+   # in RenderDevice.cpp, so it does not compile against 10.8.1. Only the GBM hunks are carried.
+   ( cd bgfx && patch -p1 < "${VPX_PATCH_DIR}/bgfx-kmsdrm-gbm-egl.patch" )
+   # FORK PATCH (4kp): build BGFX GLES-only. bgfx's shared glcontext_egl binds EGL_OPENGL_API when
+   # BGFX_CONFIG_RENDERER_OPENGL is enabled, and libmali on this device is GLES-only, so that call
+   # fails with EGL_BAD_PARAMETER (0x300C) and BGFX aborts: "Could not set API! error: 12300".
+   # bgfx.cmake's BGFX_OPENGL[ES]_VERSION only set MIN_VERSION, they do not disable a renderer, so
+   # override the config defines directly (src/config.h guards them with #ifndef).
    cmake -S. \
       -DBGFX_LIBRARY_TYPE=SHARED \
       -DBGFX_BUILD_TOOLS=OFF \
       -DBGFX_BUILD_EXAMPLES=OFF \
       -DBGFX_CONFIG_MULTITHREADED=ON \
       -DBGFX_CONFIG_MAX_FRAME_BUFFERS=256 \
+      -DCMAKE_C_FLAGS="-DBGFX_CONFIG_RENDERER_OPENGL=0 -DBGFX_CONFIG_RENDERER_OPENGLES=32" \
+      -DCMAKE_CXX_FLAGS="-DBGFX_CONFIG_RENDERER_OPENGL=0 -DBGFX_CONFIG_RENDERER_OPENGLES=32" \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
    cmake --build build -- -j${NUM_PROCS}
@@ -212,6 +226,18 @@ if [ "${LIBDMDUTIL_EXPECTED_SHA}" != "${LIBDMDUTIL_FOUND_SHA}" ]; then
    tar xzf libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
    mv libdmdutil-${LIBDMDUTIL_SHA} libdmdutil
    cd libdmdutil
+   # FORK PATCH (4kp): PPUC/libvni's public headers use size_t without including <stddef.h>, which
+   # GCC 12 rejects. libvni is fetched *and* built by libdmdutil's own external.sh, so the fix has to
+   # land between its extract and its build. Insert a patch step into that script right after the
+   # extract, using a marker line that is unique in the file.
+   awk '
+      { print }
+      /^mv libvni-\$\{LIBVNI_SHA\} libvni$/ {
+         print "sed -i \"1i #include <stddef.h>\" libvni/src/vni_aes.h libvni/src/vni_heatshrink.h"
+      }
+   ' platforms/linux/aarch64/external.sh > external.sh.patched \
+      && mv external.sh.patched platforms/linux/aarch64/external.sh \
+      && chmod +x platforms/linux/aarch64/external.sh
    ./platforms/linux/aarch64/external.sh
    cmake \
       -DPLATFORM=linux \
@@ -393,6 +419,29 @@ if [ "${LIBWINEVBS_EXPECTED_SHA}" != "${LIBWINEVBS_FOUND_SHA}" ]; then
 fi
 
 #
+# fetch header-only fmtlib (see FMT_SHA in config.sh)
+#
+
+FMT_EXPECTED_SHA="${FMT_SHA}"
+FMT_FOUND_SHA="$([ -f fmt/cache.txt ] && cat fmt/cache.txt || echo "")"
+
+if [ "${FMT_EXPECTED_SHA}" != "${FMT_FOUND_SHA}" ]; then
+   echo "Fetching fmt. Expected: ${FMT_EXPECTED_SHA}, Found: ${FMT_FOUND_SHA}"
+
+   rm -rf fmt
+   mkdir fmt
+   cd fmt
+
+   curl -sL https://github.com/fmtlib/fmt/archive/refs/tags/${FMT_SHA}.tar.gz -o fmt-${FMT_SHA}.tar.gz
+   tar xzf fmt-${FMT_SHA}.tar.gz
+   mv fmt-${FMT_SHA} fmt
+
+   echo "$FMT_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
 # copy libraries
 #
 
@@ -407,6 +456,10 @@ cp -r SDL3/SDL_ttf/include/SDL3_ttf ../../../third-party/include/
 
 cp -a freeimage/freeimage/build/libfreeimage.{so,so.*} ../../../third-party/runtime-libs/linux-aarch64
 cp freeimage/freeimage/Source/FreeImage.h ../../../third-party/include
+
+rm -rf ../../../third-party/include/fmt
+cp -r fmt/fmt/include/fmt ../../../third-party/include/
+cp fmt/fmt/LICENSE ../../../third-party/include/fmt/
 
 cp -a bgfx/bgfx.cmake/build/cmake/bgfx/libbgfx.so ../../../third-party/runtime-libs/linux-aarch64
 cp -r bgfx/bgfx.cmake/bgfx/include/bgfx ../../../third-party/include/

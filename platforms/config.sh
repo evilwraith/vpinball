@@ -2,12 +2,25 @@
 
 set -e
 
-SDL_SHA=f87239e71e42da91ca317a12eefb82cfbf3393eb
+# VPINBALL/4kp: build SDL3 from evilwraith/SDL (branch 4kp1081), not libsdl-org. That fork forces
+# the KMSDRM backend down the LEGACY modesetting path; stock SDL3 enables DRM_CLIENT_CAP_ATOMIC,
+# and the SDL2 backend this fork shipped for years has no atomic support at all. See
+# backport/1081-phase1-log.md F17/F18.
+SDL_REPO=evilwraith/SDL
+SDL_SHA=474330f01b9ee58aa25b9498d5beff3b9180f669
+SDL_PATCHSET=kmsdrm-force-legacy-consistency-001
 SDL_IMAGE_SHA=bec9134a26c7d0f31b36d6083c25296e04cabff5
 SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
 FREEIMAGE_SHA=b1613452a0c3849d43ac877b154cf51ff9e078d3
+# 4kp: header-only fmtlib, used ONLY as the <format> implementation behind
+# third-party/include/compat/cxx-format/ when the toolchain's libstdc++ has none (GCC < 13).
+# Fetched unconditionally because external.sh cannot know the compiler CMake will pick; on GCC 13+
+# the headers are simply never included.
+FMT_SHA=11.1.4
 BGFX_CMAKE_VERSION=1.153.9385-561
 BGFX_PATCH_SHA=9bec2b3dd1cbb2082f88fc3881ccfa5a09250769
+# 4kp: KMSDRM/GBM EGL hunks ported from evilwraith/bgfx@03f25e9 (branch 4kp_fixes)
+BGFX_PATCHSET=kmsdrm-gbm-egl-gles-only-002
 PINMAME_SHA=f53ff084f8313c8b3458aff4cc6375a3f6b2db72
 OPENXR_SHA=b15ef6ce120dad1c7d3ff57039e73ba1a9f17102
 LIBDMDUTIL_SHA=da00021340ed41875036d0622f0f22b09a11349d
