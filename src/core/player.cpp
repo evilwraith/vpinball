@@ -80,6 +80,28 @@ using namespace VPX;
 #define WIN32_PLAYER_WND_CLASSNAME _T("VPPlayer")
 
 
+#ifdef __linux__
+// Parse a single /proc/meminfo field, in kB. Returns 0 when unavailable, which callers treat as
+// "unknown, carry on" rather than "no memory".
+static unsigned long long read_meminfo_kb(const char* key)
+{
+   std::ifstream file("/proc/meminfo");
+   std::string label;
+   unsigned long long value = 0;
+   while (file >> label)
+   {
+      if (label == key)
+      {
+         file >> value;
+         return value;
+      }
+      std::string rest;
+      std::getline(file, rest);
+   }
+   return 0;
+}
+#endif
+
 Player::Player(PinTable *const table, const PlayMode playMode)
    : m_ptable(table)
    , m_playMode(playMode)
