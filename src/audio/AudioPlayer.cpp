@@ -109,7 +109,28 @@ static ma_result ma_device_init__sdl(ma_device* pDevice, const ma_device_config*
    if (pConfig->playback.pDeviceID)
       requestedDeviceId = pConfig->playback.pDeviceID->custom.i;
 
-   pDeviceEx->stream = SDL_OpenAudioDeviceStream(requestedDeviceId, nullptr, ma_audio_callback_playback__sdl, pDeviceEx);
+   // Ask SDL for a specific format when the caller requested one. Passing nullptr means "whatever the
+   // device defaults to", which on ALSA is stereo even when the card is 7.1 -- so a surround output
+   // mode (SSF / 6CH) would silently get 2 channels and never use the extra speakers. miniaudio
+   // carries the request in the descriptor, so honour it here rather than requiring an env var.
+   SDL_AudioSpec desiredSpec;
+   const bool hasDesiredSpec = pDescriptorPlayback->channels != 0;
+   if (hasDesiredSpec)
+   {
+      desiredSpec.channels = static_cast<int>(pDescriptorPlayback->channels);
+      desiredSpec.freq = pDescriptorPlayback->sampleRate != 0 ? static_cast<int>(pDescriptorPlayback->sampleRate) : 44100;
+      desiredSpec.format = SDL_AUDIO_F32; // matches deviceConfig.playback.format
+   }
+
+   pDeviceEx->stream = SDL_OpenAudioDeviceStream(requestedDeviceId, hasDesiredSpec ? &desiredSpec : nullptr, ma_audio_callback_playback__sdl, pDeviceEx);
+   if (pDeviceEx->stream == nullptr && hasDesiredSpec)
+   {
+      // The device could not give us the requested layout; fall back to its default rather than
+      // failing outright, so a mis-set output mode degrades to stereo instead of losing all audio.
+      PLOGW << "Could not open audio device with " << pDescriptorPlayback->channels << " channels (" << SDL_GetError()
+            << "); retrying with the device default.";
+      pDeviceEx->stream = SDL_OpenAudioDeviceStream(requestedDeviceId, nullptr, ma_audio_callback_playback__sdl, pDeviceEx);
+   }
    if (pDeviceEx->stream == nullptr)
    {
       PLOGE << "Failed to open SDL audio device (Error: " << SDL_GetError() << ')';
@@ -152,6 +173,17 @@ static ma_result ma_device_init__sdl(ma_device* pDevice, const ma_device_config*
    ma_channel_map_init_standard(ma_standard_channel_map_default, pDescriptorPlayback->channelMap, std::size(pDescriptorPlayback->channelMap), pDescriptorPlayback->channels);
 
    PLOGI << "Audio device initialized. Device: '" << SDL_GetAudioDeviceName(pDeviceEx->deviceID) << "', Freq : " << specs.freq << ", Format: " << SDL_GetAudioFormatName(specs.format) << ", Channels: " << specs.channels << ", Driver: " << SDL_GetCurrentAudioDriver();
+
+   // Surround panning places sounds by channel INDEX, so the layout miniaudio assumes has to match
+   // what the driver actually produces -- see the TODO above. Log it rather than assume: on a 7.1
+   // card ALSA's order and miniaudio's "standard default" can disagree, which puts effects on the
+   // wrong speakers while everything still 'works'.
+   if (pDescriptorPlayback->channels > 2)
+   {
+      char mapText[256];
+      if (ma_channel_map_to_string(pDescriptorPlayback->channelMap, pDescriptorPlayback->channels, mapText, sizeof(mapText)) > 0)
+         PLOGI << "Audio channel map (" << pDescriptorPlayback->channels << " ch): " << mapText;
+   }
    return MA_SUCCESS;
 }
 
@@ -241,6 +273,17 @@ AudioPlayer::AudioPlayer(const string& backglassDevice, const string& playfieldD
    ma_context_init(backends, std::size(backends), &contextConfig, m_maContext.get());
    m_maContext->pUserData = this;
 
+   // Channels the playfield's output mode needs. Computed BEFORE either device is opened, because in
+   // SDL3 the physical device's format is fixed by the FIRST logical open on it -- later opens just
+   // get a converting stream. Backglass and playfield commonly resolve to the same physical device
+   // (both default to "ALSA default playback device"), so if the backglass opens first with no
+   // request, the device latches to stereo and the playfield's request for 8 arrives too late.
+   const ma_uint32 surroundChannels
+      = (playfieldSoundMode == SNDCFG_SND3DSSF || playfieldSoundMode == SNDCFG_SND3D6CH)                    ? 8  // 7.1
+      : (playfieldSoundMode == SNDCFG_SND3DFRONTISFRONT || playfieldSoundMode == SNDCFG_SND3DFRONTISREAR)   ? 6  // 5.1
+      : (playfieldSoundMode == SNDCFG_SND3DALLREAR)                                                         ? 4
+                                                                                                            : 0; // 2CH
+
    struct SDLDeviceInfo
    {
       int id;
@@ -265,6 +308,15 @@ AudioPlayer::AudioPlayer(const string& backglassDevice, const string& playfieldD
       deviceConfig = ma_device_config_init(ma_device_type_playback);
       deviceConfig.playback.pDeviceID = &deviceInfo.dev.id;
       deviceConfig.playback.format = ma_format_f32;
+      // Opened first, so it is this open that fixes the shared physical device's format. Adopt the
+      // playfield's requirement when both land on the same device, otherwise the playfield can never
+      // get its surround channels. Backglass content is still stereo; SDL upmixes it.
+      if (surroundChannels != 0 && m_backglassAudioDevice == m_playfieldAudioDevice)
+      {
+         deviceConfig.playback.channels = surroundChannels;
+         PLOGI << "Backglass shares the playfield device; opening it with " << surroundChannels
+               << " channels so the shared device is not latched to stereo";
+      }
       deviceConfig.noPreSilencedOutputBuffer = MA_TRUE; // We'll always be outputting to every frame in the callback so there's no need for a pre-silenced buffer.
       deviceConfig.noClip = MA_TRUE; // The engine will do clipping itself.
       result = ma_device_init(m_maContext.get(), &deviceConfig, reinterpret_cast<ma_device*>(m_backglassDevice.get()));
@@ -309,6 +361,24 @@ AudioPlayer::AudioPlayer(const string& backglassDevice, const string& playfieldD
       deviceConfig = ma_device_config_init(ma_device_type_playback);
       deviceConfig.playback.pDeviceID = &deviceInfo.dev.id;
       deviceConfig.playback.format = ma_format_f32;
+      // Surround output modes are meaningless on a stereo stream: SSF and 6CH pan across side/rear
+      // speakers, so the device must be opened with those channels present.
+      //
+      // Ask for what the OUTPUT MODE needs, not what the device claims to have. Querying the device
+      // does not work: ALSA's "default" advertises 2 channels even when it is a 7.1 card, so
+      // SDL_GetAudioDeviceFormat reports stereo and we would never request more. ALSA's plug layer
+      // will hand back the full layout when it is asked for it. (The fork's standalone miniaudio
+      // backend reaches the same conclusion the blunt way, hardcoding 8 on RK3588.)
+      //
+      // If the device genuinely cannot provide the layout, ma_device_init__sdl falls back to the
+      // device default, so this degrades to stereo rather than losing audio.
+      const ma_uint32 modeChannels = surroundChannels;
+      if (modeChannels != 0)
+      {
+         deviceConfig.playback.channels = modeChannels;
+         PLOGI << "Playfield output mode " << static_cast<int>(m_soundMode3D) << " requests " << modeChannels
+               << " channels from the audio device";
+      }
       deviceConfig.noPreSilencedOutputBuffer = MA_TRUE; // We'll always be outputting to every frame in the callback so there's no need for a pre-silenced buffer.
       deviceConfig.noClip = MA_TRUE; // The engine will do clipping itself.
       result = ma_device_init(m_maContext.get(), &deviceConfig, reinterpret_cast<ma_device*>(m_playfieldDevice.get()));
