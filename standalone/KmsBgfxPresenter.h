@@ -281,7 +281,7 @@ inline void ProbeScanoutRotation(int drmFd, uint32_t crtcId, uint32_t fbId, uint
          : (rc0 != 0)               ? "plane cannot attach to this CRTC at all -> not a rotation limit"
                                     : "unknown";
 
-      PLOGI.printf("[kms_rot_probe] crtc=%u plane=%u type=%s mask=0x%llx  rotate-90 -> %s (%s)   control rotate-0 -> %s (%s)   VERDICT: %s",
+      PLOGD.printf("[kms_rot_probe] crtc=%u plane=%u type=%s mask=0x%llx  rotate-90 -> %s (%s)   control rotate-0 -> %s (%s)   VERDICT: %s",
          crtcId, planeId, type == DRM_PLANE_TYPE_PRIMARY ? "primary" : (type == DRM_PLANE_TYPE_OVERLAY ? "overlay" : "cursor"),
          (unsigned long long)p.rotationMask,
          rc90 == 0 ? "ACCEPTED" : "rejected", rc90 == 0 ? "-" : strerror(-rc90),
@@ -420,10 +420,15 @@ public:
          return false;
       }
 
+      // Diagnostic only, and the answer has not changed on this hardware: VOP2 refuses rotate-90 on
+      // every plane because it needs AFBC. It costs two TEST_ONLY atomic commits per plane per CRTC
+      // at startup, so run it only when debug logging is actually enabled (Release builds cap the
+      // logger at info, see Logger.cpp).
       if (!m_rotationProbed)
       {
          m_rotationProbed = true;
-         ProbeScanoutRotation(m_drmFd, m_crtcId, fbId, m_modeW, m_modeH);
+         if (plog::get() != nullptr && plog::get()->checkSeverity(plog::debug))
+            ProbeScanoutRotation(m_drmFd, m_crtcId, fbId, m_modeW, m_modeH);
       }
 
       // Contract 4: the old buffer is only safe to recycle now that the new one is latched.
