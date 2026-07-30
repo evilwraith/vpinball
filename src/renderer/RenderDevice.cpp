@@ -1973,9 +1973,14 @@ void RenderDevice::AddWindow(VPX::Window* wnd)
    PLOGD << "Creating BGFX swap chain for window " << SDL_GetWindowTitle(wnd->GetCore()) << " (" << wnd->GetPixelWidth() << 'x' << wnd->GetPixelHeight() << " "
          << bimg::getName(bimg::TextureFormat::Enum(bgfxFormat)) << ')';
    SDL_Window* sdlWnd = wnd->GetCore();
-   void* nwh;
+   // VPINBALL/4kp: initialised, because the platform block below does not assign it for every video
+   // driver. On KMSDRM neither the x11 nor the wayland branch runs, so this used to reach
+   // bgfx::createFrameBuffer() as an INDETERMINATE pointer and crash as soon as a second output
+   // window (backglass / scoreview) was enabled.
+   void* nwh = nullptr;
 #if BX_PLATFORM_LINUX || BX_PLATFORM_BSD
-   void* ndt;
+   void* ndt = nullptr;
+   (void)ndt; // assigned per-driver below but unused here; BGFX takes only the native window
    if (SDL_GetCurrentVideoDriver() == "x11"sv) {
       ndt = SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWnd), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
       nwh = (void*)SDL_GetNumberProperty(SDL_GetWindowProperties(sdlWnd), SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
@@ -2002,6 +2007,12 @@ void RenderDevice::AddWindow(VPX::Window* wnd)
 #else
    return;
 #endif // BX_PLATFORM_
+   if (nwh == nullptr)
+   {
+      PLOGE << "No native window handle for '" << SDL_GetWindowTitle(sdlWnd) << "' on video driver '" << SDL_GetCurrentVideoDriver()
+            << "'; skipping its swap chain rather than handing BGFX an invalid handle.";
+      return;
+   }
    bgfx::FrameBufferHandle fbh = bgfx::createFrameBuffer(nwh, uint16_t(wnd->GetPixelWidth()), uint16_t(wnd->GetPixelHeight()), bgfxFormat);
    m_outputWnd.push_back(wnd);
    wnd->SetBackBuffer(new RenderTarget(this, SurfaceType::RT_DEFAULT, fbh, BGFX_INVALID_HANDLE, bgfxFormat, BGFX_INVALID_HANDLE, bgfx::TextureFormat::Count,
