@@ -1356,6 +1356,13 @@ void Renderer::SetupDisplayRenderer(const bool isBackdrop, const Vertex3D_NoTex2
       const float r = 1.0f / (duv1.x * duv2.y - duv1.y * duv2.x);
       Vertex3Ds tangent = (dv1 * duv2.y - dv2 * duv1.y) * r;
       Vertex3Ds bitangent = (dv2 * duv1.x - dv1 * duv2.x) * r;
+      // Callers MUST pass nullptr for a 2D composited display. This math is world-space: the depth
+      // constant below is in VP units, and it is projected through the model-view of a real 3D
+      // camera. A 2D display's quad is in normalised [0,1] space with z=0 and its "model-view" is an
+      // ortho projection, so tangent/bitangent come out ~1 while depth is ~9.3 VPU -- the resulting
+      // glassPad offset is several times the whole display and pushes the emitter off the glass, so
+      // nothing renders. A flat window viewed head-on has no view direction anyway, so the honest
+      // answer there is zero parallax rather than a rescaled one.
       const Matrix3D& mv = GetMVP().GetModelView(0);
       tangent = mv.MultiplyVectorNoTranslate(tangent);
       bitangent = mv.MultiplyVectorNoTranslate(bitangent);
@@ -3151,7 +3158,8 @@ void Renderer::DrawMatrixDisplay(VPXRenderContext2D* ctx, VPXDisplayRenderStyle 
    {
       g_pplayer->m_renderer->SetupCRTRender(style - VPXDMDStyle_Pixelated, false, vec3(dispTintR, dispTintG, dispTintB), brightness, dTex, alpha, //
          isLinearOutput ? Renderer::ColorSpace::Linear : Renderer::ColorSpace::Reinhard_sRGB, //
-         vertices, vec4(dispPadL, dispPadT, dispPadR, dispPadB), vec3(glassTintR, glassTintG, glassTintB), glassRoughness, gTex.get(),
+         ctx->is2D ? nullptr : vertices, // no view direction in 2D: see below
+         vec4(dispPadL, dispPadT, dispPadR, dispPadB), vec3(glassTintR, glassTintG, glassTintB), glassRoughness, gTex.get(),
          vec4(glassAreaX, glassAreaY, glassAreaW, glassAreaH), //
          vec3(glassAmbientR, glassAmbientG, glassAmbientB));
    }
@@ -3159,7 +3167,8 @@ void Renderer::DrawMatrixDisplay(VPXRenderContext2D* ctx, VPXDisplayRenderStyle 
    {
       g_pplayer->m_renderer->SetupDMDRender(style, false, vec3(dispTintR, dispTintG, dispTintB), brightness, dTex, alpha, //
          isLinearOutput ? Renderer::ColorSpace::Linear : Renderer::ColorSpace::Reinhard_sRGB, //
-         vertices, vec4(dispPadL, dispPadT, dispPadR, dispPadB), vec3(glassTintR, glassTintG, glassTintB), glassRoughness, gTex.get(),
+         ctx->is2D ? nullptr : vertices, // no view direction in 2D: see below
+         vec4(dispPadL, dispPadT, dispPadR, dispPadB), vec3(glassTintR, glassTintG, glassTintB), glassRoughness, gTex.get(),
          vec4(glassAreaX, glassAreaY, glassAreaW, glassAreaH), //
          vec3(glassAmbientR, glassAmbientG, glassAmbientB));
    }
@@ -3196,7 +3205,8 @@ void Renderer::DrawSegmentDisplay(VPXRenderContext2D* ctx, VPXSegDisplayRenderSt
       { vx1, vy2, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f }
    };
    g_pplayer->m_renderer->SetupSegmentRenderer(style, false, vec3(dispTintR, dispTintG, dispTintB), brightness, (Renderer::SegmentFamily)shapeHint, type, state,
-      isLinearOutput ? Renderer::ColorSpace::Linear : Renderer::ColorSpace::Reinhard_sRGB, vertices, vec4(dispPadL, dispPadT, dispPadR, dispPadB), vec3(glassTintR, glassTintG, glassTintB),
+      isLinearOutput ? Renderer::ColorSpace::Linear : Renderer::ColorSpace::Reinhard_sRGB, ctx->is2D ? nullptr : vertices,
+      vec4(dispPadL, dispPadT, dispPadR, dispPadB), vec3(glassTintR, glassTintG, glassTintB),
       glassRoughness, gTex.get(), vec4(glassAreaX, glassAreaY, glassAreaW, glassAreaH), vec3(glassAmbientR, glassAmbientG, glassAmbientB));
    rdl->DrawTexturedQuad(rdl->m_DMDShader, vertices, true, g_pplayer->m_renderer->m_ancillaryRenderSetup.depthbias);
 }
