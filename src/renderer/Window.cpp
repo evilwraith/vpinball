@@ -216,6 +216,16 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
          // DX9 does not need any special flag either
       #endif
 
+      #if defined(ENABLE_BGFX)
+      /* VPINBALL/4kp: on KMSDRM, SDL flags every non-Vulkan window SDL_WINDOW_OPENGL and creates an
+         EGL surface on its gbm_surface (SDL_kmsdrmvideo.c KMSDRM_CreateWindow/CreateSurfaces). BGFX
+         then creates its own EGL surface on that same gbm_surface, leaving two layers owning
+         presentation state for one surface. Ask SDL to skip its surface (hint added by our SDL
+         fork) so ownership is unambiguous: SDL allocates the GBM objects, BGFX renders into them. */
+      if (SDL_GetCurrentVideoDriver() == "kmsdrm"sv)
+         SDL_SetHint("SDL_KMSDRM_SKIP_EGL_SURFACE", "1");
+      #endif
+
       // Request forced raising (standard behavior except on Windows)
       SDL_SetHint(SDL_HINT_FORCE_RAISEWINDOW, "1");
 

@@ -1298,6 +1298,27 @@ RenderDevice::RenderDevice(
       init.platformData.ndt = SDL_GetPointerProperty(SDL_GetWindowProperties(swapchainWnd->GetCore()), SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, NULL);
       init.platformData.nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(swapchainWnd->GetCore()), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, NULL);
    }
+   else if (SDL_GetCurrentVideoDriver() == "kmsdrm"sv) {
+      /* VPINBALL/4kp: upstream handles only x11 and wayland here, so on KMSDRM ndt/nwh stayed null
+         and BGFX init failed outright ("BGFX initialization failed").
+
+         SDL owns the KMSDRM/GBM objects; hand them to BGFX as the native display/window. A
+         gbm_device/gbm_surface pair is not something the legacy EGL entry points can classify, so
+         BGFX_USE_GBM tells our patched glcontext_egl to use the GBM EGL platform for them (see
+         BGFX_PATCHSET=kmsdrm-gbm-egl-001). Must be set before the render thread runs bgfx::init(). */
+      const SDL_PropertiesID wndProps = SDL_GetWindowProperties(swapchainWnd->GetCore());
+      init.platformData.ndt = SDL_GetPointerProperty(wndProps, SDL_PROP_WINDOW_KMSDRM_GBM_DEVICE_POINTER, NULL);
+      init.platformData.nwh = SDL_GetPointerProperty(wndProps, "SDL.window.kmsdrm.gbm_surface", NULL);
+      setenv("BGFX_USE_GBM", "1", 1);
+
+      /* Vulkan is not usable on this Mali/KMSDRM stack, and BGFX's auto-selection prefers it. Pin
+         the GLES backend unless the user explicitly asked for something in the settings. */
+      if (init.type == bgfx::RendererType::Count)
+         init.type = bgfx::RendererType::OpenGLES;
+
+      PLOGI << "KMSDRM detected: handing BGFX gbm_dev=" << init.platformData.ndt
+            << " gbm_surface=" << init.platformData.nwh << ", backend " << bgfxRendererName(init.type);
+   }
    #elif BX_PLATFORM_OSX
    init.platformData.nwh = SDL_GetRenderMetalLayer(SDL_CreateRenderer(swapchainWnd->GetCore(), "Metal"));
    #elif BX_PLATFORM_IOS
@@ -1988,6 +2009,11 @@ void RenderDevice::AddWindow(VPX::Window* wnd)
    else if (SDL_GetCurrentVideoDriver() == "wayland"sv) {
       ndt = SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWnd), SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, NULL);
       nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWnd), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, NULL);
+   }
+   else if (SDL_GetCurrentVideoDriver() == "kmsdrm"sv) {
+      // Each KMSDRM window owns its own gbm_surface; that is the native window BGFX renders into,
+      // exactly as for the playfield swapchain (see the kmsdrm branch in RenderDevice()).
+      nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWnd), "SDL.window.kmsdrm.gbm_surface", NULL);
    }
 #elif BX_PLATFORM_OSX
    {
