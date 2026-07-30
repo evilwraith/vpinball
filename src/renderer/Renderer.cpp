@@ -3262,6 +3262,29 @@ RenderTarget* Renderer::SetupAncillaryRenderTarget(
    matWorldViewProj[0]._41 = -1.f + 2.f * static_cast<float>(outputX) / static_cast<float>(outputRT->GetWidth());
    matWorldViewProj[0]._22 = -2.f * static_cast<float>(outputH) / static_cast<float>(outputRT->GetHeight());
    matWorldViewProj[0]._42 = 1.f - 2.f * static_cast<float>(outputY) / static_cast<float>(outputRT->GetHeight());
+
+   // Output rotation, for a panel mounted rotated relative to its content (the cabinet DMD panel is
+   // physically portrait while its content is landscape). Everything above this point behaves as if
+   // the display itself were rotated: the caller reports the SWAPPED extents for 90/270 below, so
+   // plugins lay out in the panel's logical orientation and need no changes at all.
+   //
+   // Folded into the 2D projection rather than done as a separate rotated blit: plugin geometry is
+   // built in normalised [0,1] space (see DrawImage), and rotating a unit square about its centre
+   // maps it onto itself, so the physical aspect comes entirely from the target. That makes this
+   // free -- no intermediate render target, no extra pass, no extra memory.
+   //
+   // Scanout rotation would be cheaper still, but VOP2 refuses rotate-90 on our linear buffers; see
+   // backport/1081-phase1-log.md F26 for the controlled probe that settled it.
+   const int rotationSteps = m_table->m_settings.GetWindow_Rotation(window) & 3; // 0..3 == 0/90/180/270
+   if (rotationSteps != 0)
+   {
+      const Matrix3D rot = Matrix3D::MatrixTranslate(-0.5f, -0.5f, 0.f)
+         * Matrix3D::MatrixRotateZ(static_cast<float>(rotationSteps) * (float)(M_PI * 0.5))
+         * Matrix3D::MatrixTranslate(0.5f, 0.5f, 0.f);
+      matWorldViewProj[0] = rot * matWorldViewProj[0];
+      if (rotationSteps & 1) // 90 or 270: the logical surface is the panel with its axes swapped
+         std::swap(outputW, outputH);
+   }
    const int eyes = m_stereo3D != StereoMode::STEREO_OFF ? 2 : 1;
    if (eyes > 1)
       matWorldViewProj[1] = matWorldViewProj[0];

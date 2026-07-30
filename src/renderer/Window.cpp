@@ -295,6 +295,12 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
       m_isPositioningSupported &= SDL_SetWindowPosition(m_nwnd, x, y);
    }
 
+   // ...and whether it allows resizing them. KMSDRM does not: a window there IS the panel, and
+   // KMSDRM_SetWindowSize only marks the surfaces dirty without changing anything. It cannot be
+   // probed the way positioning is, because SDL_SetWindowSize reports success regardless and a
+   // behavioural probe would mean actually resizing the window.
+   m_isSizingSupported = SDL_GetCurrentVideoDriver() == nullptr || SDL_GetCurrentVideoDriver() != "kmsdrm"sv;
+
    if (const SDL_DisplayMode* const displayMode = SDL_GetDesktopDisplayMode(selectedDisplay.display); displayMode)
    {
       PLOGI << std::format("Window #{} ({}x{}) was created on display {} [{}x{} {}Hz {}]", (int)m_windowId, m_pixelWidth, m_pixelHeight, selectedDisplay.displayName.c_str(),

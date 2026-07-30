@@ -370,155 +370,191 @@ void DisplaySettingsPage::BuildWindowPage()
       const int maxHeight = m_arLock == 0 ? m_displays[wndDisplay].videomode.GetPixelHeight()
                                           : min(containerHeight, (m_displays[wndDisplay].videomode.GetPixelWidth() * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x);
 
-      vector<string> arNames;
-      for (const int2& aspectRatio : aspectRatios)
-         if (aspectRatio.x == 0)
-            arNames.push_back("Free"s);
-         else
-            arNames.push_back((aspectRatio.x > aspectRatio.y ? "Landscape - "s : "Portrait  - "s) + std::to_string(aspectRatio.x) + ':' + std::to_string(aspectRatio.y));
-      AddItem(std::make_unique<InGameUIItem>(
-         VPX::Properties::EnumPropertyDef(""s, ""s, "Lock aspect ratio"s, "Limit window size to a predefined aspect ratio"s, false, 0, m_arLock, arNames), //
-         [this]() { return m_arLock; }, // Live
-         [this](const Settings& settings) { return m_arLock; }, // Stored
-         [this](int, int v)
-         {
-            m_arLock = v;
-            RequestRebuild();
-         }, //
-         [](Settings&) { /* UI state, not persisted */ }, //
-         [](int, Settings&, bool) { /* UI state, not persisted */ }));
-
-// OpenGL and DirectX9 backends do not support dynamic resizing of the main window
-#if !defined(ENABLE_BGFX)
-      if (m_isMainWindow)
-      { // For main window, we do not dynamically change size as it is not supported and the UI breaks (would require to re-setup everything)
-         // TODO this property is directly persisted. It does not follow the overall UI design: App/Table/Live state => Implement live state (will also enable table override)
-         Settings::GetRegistry().Register(Settings::GetWindow_Width_Property(m_wndId)->WithRange(0, min(maxWidth, containerWidth - m_player->m_ptable->m_settings.GetWindow_WndX(m_wndId))));
-         AddItem(std::make_unique<InGameUIItem>(
-                    Settings::m_propWindow_Width[m_wndId], "%d"s, //
-                    [this]() { return m_player->m_ptable->m_settings.GetWindow_Width(m_wndId); }, //
-                    [this](int, int v)
-                    {
-                       m_delayApplyNotifId = m_player->m_liveUI->PushNotification("This change will be applied after restarting the game"s, 5000, m_delayApplyNotifId);
-                       if (m_arLock != 0)
-                       {
-                          int h = (v * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
-                          if (h > Settings::GetWindow_Height_Property(m_wndId)->m_max)
-                          {
-                             h = Settings::GetWindow_Height_Property(m_wndId)->m_max;
-                             v = (h * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
-                          }
-                          m_player->m_ptable->m_settings.SetWindow_Height(m_wndId, h, false);
-                       }
-                       m_player->m_ptable->m_settings.SetWindow_Width(m_wndId, v, false);
-                       RequestRebuild();
-                    }))
-            .m_excludeFromDefault = true;
-
-         // TODO this property is directly persisted. It does not follow the overall UI design: App/Table/Live state => Implement live state (will also enable table override)
-         Settings::GetRegistry().Register(
-            Settings::GetWindow_Height_Property(m_wndId)->WithRange(0, min(maxHeight, containerHeight - m_player->m_ptable->m_settings.GetWindow_WndY(m_wndId))));
-         AddItem(std::make_unique<InGameUIItem>(
-                    Settings::m_propWindow_Height[m_wndId], "%d"s, //
-                    [this]() { return m_player->m_ptable->m_settings.GetWindow_Height(m_wndId); }, //
-                    [this](int, int v)
-                    {
-                       m_delayApplyNotifId = m_player->m_liveUI->PushNotification("This change will be applied after restarting the game"s, 5000, m_delayApplyNotifId);
-                       if (m_arLock != 0)
-                       {
-                          int w = (v * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
-                          if (w > Settings::GetWindow_Width_Property(m_wndId)->m_max)
-                          {
-                             w = Settings::GetWindow_Width_Property(m_wndId)->m_max;
-                             v = (w * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
-                          }
-                          m_player->m_ptable->m_settings.SetWindow_Width(m_wndId, w, false);
-                       }
-                       m_player->m_ptable->m_settings.SetWindow_Height(m_wndId, v, false);
-                       RequestRebuild();
-                    }))
-            .m_excludeFromDefault = true;
-      }
-      else
-#endif
+      // Output adjustment: scale about the display centre plus a pixel offset. This is what actually
+      // takes effect on KMSDRM, where SDL cannot resize or move a window -- the presenter applies it
+      // to the plane's destination rect and re-reads it every frame, so editing here previews live.
+      // Ported from the 10.8.0 fork's DMD window placement page. Ancillary windows only; the
+      // playfield has no entry in these property arrays and is always full-screen.
+      if (!m_isMainWindow)
       {
-         Settings::GetRegistry().Register(Settings::GetWindow_Width_Property(m_wndId)->WithRange(m_isMainWindow ? 320 : 0, maxWidth));
          AddItem(std::make_unique<InGameUIItem>(
-                    Settings::m_propWindow_Width[m_wndId], "%d"s, //
-                    [this]() { return (m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow())->GetPixelWidth(); }, //
-                    [this, containerWidth, containerHeight, wndDisplay](int prev, int v)
-                    {
-                       // Apply AR constraint
-                       Window* const wnd = m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow();
-                       SDL_Point prevSize { prev, wnd->GetPixelHeight() };
-                       SDL_Point size { v, wnd->GetPixelHeight() };
-                       if (m_arLock != 0)
-                       {
-                          int h = (v * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
-                          if (h > Settings::GetWindow_Height_Property(m_wndId)->m_max)
-                          {
-                             h = Settings::GetWindow_Height_Property(m_wndId)->m_max;
-                             v = (h * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
-                          }
-                          size.y = h;
-                       }
-                       size.x = v;
+            Settings::m_propWindow_Scale[m_wndId], 100.f, "%.0f%%"s, //
+            [this]() { return m_player->m_ptable->m_settings.GetWindow_Scale(m_wndId); }, //
+            [this](float, float v) { m_player->m_ptable->m_settings.SetWindow_Scale(m_wndId, v, false); }));
 
-                       if (m_isMainWindow)
-                          m_delayApplyNotifId
-                             = m_player->m_liveUI->PushNotification("You have changed main window size\nRendering will be stretched until you restart the game"s, 5000, m_delayApplyNotifId);
-
-                       SDL_Point pos;
-                       wnd->GetPixelPos(pos.x, pos.y);
-                       const int displayLeft = wnd->LogicalToPixel(m_displays[wndDisplay].left);
-                       const int displayTop = wnd->LogicalToPixel(m_displays[wndDisplay].top);
-                       pos.x = clamp(pos.x - (size.x - prevSize.x) / 2, displayLeft, displayLeft + containerWidth - size.x);
-                       pos.y = clamp(pos.y - (size.y - prevSize.y) / 2, displayTop, displayTop + containerHeight - size.y);
-                       wnd->SetPixelPos(pos.x, pos.y);
-                       wnd->SetPixelSize(size.x, size.y);
-                       OnStaticRenderDirty();
-                       RequestRebuild();
-                    }))
-            .m_excludeFromDefault = true;
-
-         Settings::GetRegistry().Register(Settings::GetWindow_Height_Property(m_wndId)->WithRange(m_isMainWindow ? 320 : 0, maxHeight));
+         const int maxOffsetX = m_displays[wndDisplay].videomode.GetPixelWidth() / 2;
+         const int maxOffsetY = m_displays[wndDisplay].videomode.GetPixelHeight() / 2;
+         Settings::GetRegistry().Register(Settings::GetWindow_OffsetX_Property(m_wndId)->WithRange(-maxOffsetX, maxOffsetX));
          AddItem(std::make_unique<InGameUIItem>(
-                    Settings::m_propWindow_Height[m_wndId], "%d"s, //
-                    [this]() { return (m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow())->GetPixelHeight(); }, //
-                    [this, containerWidth, containerHeight, wndDisplay](int prev, int v)
-                    {
-                       Window* const wnd = m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow();
-                       SDL_Point prevSize { wnd->GetPixelWidth(), prev };
-                       SDL_Point size { wnd->GetPixelWidth(), v };
-                       if (m_arLock != 0)
+            Settings::m_propWindow_OffsetX[m_wndId], "%d"s, //
+            [this]() { return m_player->m_ptable->m_settings.GetWindow_OffsetX(m_wndId); }, //
+            [this](int, int v) { m_player->m_ptable->m_settings.SetWindow_OffsetX(m_wndId, v, false); }));
+
+         Settings::GetRegistry().Register(Settings::GetWindow_OffsetY_Property(m_wndId)->WithRange(-maxOffsetY, maxOffsetY));
+         AddItem(std::make_unique<InGameUIItem>(
+            Settings::m_propWindow_OffsetY[m_wndId], "%d"s, //
+            [this]() { return m_player->m_ptable->m_settings.GetWindow_OffsetY(m_wndId); }, //
+            [this](int, int v) { m_player->m_ptable->m_settings.SetWindow_OffsetY(m_wndId, v, false); }));
+      }
+
+      // On KMSDRM a window IS the panel: SDL_SetWindowPosition returns SDL_Unsupported() and
+      // SDL_SetWindowSize only marks surfaces dirty, so Width/Height -- and the aspect lock that only
+      // exists to constrain them -- can never take effect. Showing controls that silently do nothing is
+      // worse than not showing them; the Scale/Offset items above are what applies on such a platform.
+      // Mirrors the existing IsPositioningSupported() guard on the X/Y items further below.
+      if ((m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow())->IsSizingSupported())
+      {
+         vector<string> arNames;
+         for (const int2& aspectRatio : aspectRatios)
+            if (aspectRatio.x == 0)
+               arNames.push_back("Free"s);
+            else
+               arNames.push_back((aspectRatio.x > aspectRatio.y ? "Landscape - "s : "Portrait  - "s) + std::to_string(aspectRatio.x) + ':' + std::to_string(aspectRatio.y));
+         AddItem(std::make_unique<InGameUIItem>(
+            VPX::Properties::EnumPropertyDef(""s, ""s, "Lock aspect ratio"s, "Limit window size to a predefined aspect ratio"s, false, 0, m_arLock, arNames), //
+            [this]() { return m_arLock; }, // Live
+            [this](const Settings& settings) { return m_arLock; }, // Stored
+            [this](int, int v)
+            {
+               m_arLock = v;
+               RequestRebuild();
+            }, //
+            [](Settings&) { /* UI state, not persisted */ }, //
+            [](int, Settings&, bool) { /* UI state, not persisted */ }));
+
+   // OpenGL and DirectX9 backends do not support dynamic resizing of the main window
+#if !defined(ENABLE_BGFX)
+         if (m_isMainWindow)
+         { // For main window, we do not dynamically change size as it is not supported and the UI breaks (would require to re-setup everything)
+            // TODO this property is directly persisted. It does not follow the overall UI design: App/Table/Live state => Implement live state (will also enable table override)
+            Settings::GetRegistry().Register(Settings::GetWindow_Width_Property(m_wndId)->WithRange(0, min(maxWidth, containerWidth - m_player->m_ptable->m_settings.GetWindow_WndX(m_wndId))));
+            AddItem(std::make_unique<InGameUIItem>(
+                       Settings::m_propWindow_Width[m_wndId], "%d"s, //
+                       [this]() { return m_player->m_ptable->m_settings.GetWindow_Width(m_wndId); }, //
+                       [this](int, int v)
                        {
-                          int w = (v * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
-                          if (w > Settings::GetWindow_Width_Property(m_wndId)->m_max)
+                          m_delayApplyNotifId = m_player->m_liveUI->PushNotification("This change will be applied after restarting the game"s, 5000, m_delayApplyNotifId);
+                          if (m_arLock != 0)
                           {
-                             w = Settings::GetWindow_Width_Property(m_wndId)->m_max;
-                             v = (w * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
+                             int h = (v * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
+                             if (h > Settings::GetWindow_Height_Property(m_wndId)->m_max)
+                             {
+                                h = Settings::GetWindow_Height_Property(m_wndId)->m_max;
+                                v = (h * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
+                             }
+                             m_player->m_ptable->m_settings.SetWindow_Height(m_wndId, h, false);
                           }
-                          size.x = w;
-                       }
-                       size.y = v;
+                          m_player->m_ptable->m_settings.SetWindow_Width(m_wndId, v, false);
+                          RequestRebuild();
+                       }))
+               .m_excludeFromDefault = true;
 
-                       if (m_isMainWindow)
-                          m_delayApplyNotifId
-                             = m_player->m_liveUI->PushNotification("You have changed main window size\nRendering will be stretched until you restart the game"s, 5000, m_delayApplyNotifId);
+            // TODO this property is directly persisted. It does not follow the overall UI design: App/Table/Live state => Implement live state (will also enable table override)
+            Settings::GetRegistry().Register(
+               Settings::GetWindow_Height_Property(m_wndId)->WithRange(0, min(maxHeight, containerHeight - m_player->m_ptable->m_settings.GetWindow_WndY(m_wndId))));
+            AddItem(std::make_unique<InGameUIItem>(
+                       Settings::m_propWindow_Height[m_wndId], "%d"s, //
+                       [this]() { return m_player->m_ptable->m_settings.GetWindow_Height(m_wndId); }, //
+                       [this](int, int v)
+                       {
+                          m_delayApplyNotifId = m_player->m_liveUI->PushNotification("This change will be applied after restarting the game"s, 5000, m_delayApplyNotifId);
+                          if (m_arLock != 0)
+                          {
+                             int w = (v * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
+                             if (w > Settings::GetWindow_Width_Property(m_wndId)->m_max)
+                             {
+                                w = Settings::GetWindow_Width_Property(m_wndId)->m_max;
+                                v = (w * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
+                             }
+                             m_player->m_ptable->m_settings.SetWindow_Width(m_wndId, w, false);
+                          }
+                          m_player->m_ptable->m_settings.SetWindow_Height(m_wndId, v, false);
+                          RequestRebuild();
+                       }))
+               .m_excludeFromDefault = true;
+         }
+         else
+#endif
 
-                       SDL_Point pos;
-                       wnd->GetPixelPos(pos.x, pos.y);
-                       const int displayLeft = wnd->LogicalToPixel(m_displays[wndDisplay].left);
-                       const int displayTop = wnd->LogicalToPixel(m_displays[wndDisplay].top);
-                       pos.x = clamp(pos.x - (size.x - prevSize.x) / 2, displayLeft, displayLeft + containerWidth - size.x);
-                       pos.y = clamp(pos.y - (size.y - prevSize.y) / 2, displayTop, displayTop + containerHeight - size.y);
-                       wnd->SetPixelPos(pos.x, pos.y);
-                       wnd->SetPixelSize(size.x, size.y);
+         {
+            Settings::GetRegistry().Register(Settings::GetWindow_Width_Property(m_wndId)->WithRange(m_isMainWindow ? 320 : 0, maxWidth));
+            AddItem(std::make_unique<InGameUIItem>(
+                       Settings::m_propWindow_Width[m_wndId], "%d"s, //
+                       [this]() { return (m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow())->GetPixelWidth(); }, //
+                       [this, containerWidth, containerHeight, wndDisplay](int prev, int v)
+                       {
+                          // Apply AR constraint
+                          Window* const wnd = m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow();
+                          SDL_Point prevSize { prev, wnd->GetPixelHeight() };
+                          SDL_Point size { v, wnd->GetPixelHeight() };
+                          if (m_arLock != 0)
+                          {
+                             int h = (v * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
+                             if (h > Settings::GetWindow_Height_Property(m_wndId)->m_max)
+                             {
+                                h = Settings::GetWindow_Height_Property(m_wndId)->m_max;
+                                v = (h * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
+                             }
+                             size.y = h;
+                          }
+                          size.x = v;
 
-                       OnStaticRenderDirty();
-                       RequestRebuild();
-                    }))
-            .m_excludeFromDefault = true;
+                          if (m_isMainWindow)
+                             m_delayApplyNotifId
+                                = m_player->m_liveUI->PushNotification("You have changed main window size\nRendering will be stretched until you restart the game"s, 5000, m_delayApplyNotifId);
+
+                          SDL_Point pos;
+                          wnd->GetPixelPos(pos.x, pos.y);
+                          const int displayLeft = wnd->LogicalToPixel(m_displays[wndDisplay].left);
+                          const int displayTop = wnd->LogicalToPixel(m_displays[wndDisplay].top);
+                          pos.x = clamp(pos.x - (size.x - prevSize.x) / 2, displayLeft, displayLeft + containerWidth - size.x);
+                          pos.y = clamp(pos.y - (size.y - prevSize.y) / 2, displayTop, displayTop + containerHeight - size.y);
+                          wnd->SetPixelPos(pos.x, pos.y);
+                          wnd->SetPixelSize(size.x, size.y);
+                          OnStaticRenderDirty();
+                          RequestRebuild();
+                       }))
+               .m_excludeFromDefault = true;
+
+            Settings::GetRegistry().Register(Settings::GetWindow_Height_Property(m_wndId)->WithRange(m_isMainWindow ? 320 : 0, maxHeight));
+            AddItem(std::make_unique<InGameUIItem>(
+                       Settings::m_propWindow_Height[m_wndId], "%d"s, //
+                       [this]() { return (m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow())->GetPixelHeight(); }, //
+                       [this, containerWidth, containerHeight, wndDisplay](int prev, int v)
+                       {
+                          Window* const wnd = m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow();
+                          SDL_Point prevSize { wnd->GetPixelWidth(), prev };
+                          SDL_Point size { wnd->GetPixelWidth(), v };
+                          if (m_arLock != 0)
+                          {
+                             int w = (v * aspectRatios[m_arLock].x) / aspectRatios[m_arLock].y;
+                             if (w > Settings::GetWindow_Width_Property(m_wndId)->m_max)
+                             {
+                                w = Settings::GetWindow_Width_Property(m_wndId)->m_max;
+                                v = (w * aspectRatios[m_arLock].y) / aspectRatios[m_arLock].x;
+                             }
+                             size.x = w;
+                          }
+                          size.y = v;
+
+                          if (m_isMainWindow)
+                             m_delayApplyNotifId
+                                = m_player->m_liveUI->PushNotification("You have changed main window size\nRendering will be stretched until you restart the game"s, 5000, m_delayApplyNotifId);
+
+                          SDL_Point pos;
+                          wnd->GetPixelPos(pos.x, pos.y);
+                          const int displayLeft = wnd->LogicalToPixel(m_displays[wndDisplay].left);
+                          const int displayTop = wnd->LogicalToPixel(m_displays[wndDisplay].top);
+                          pos.x = clamp(pos.x - (size.x - prevSize.x) / 2, displayLeft, displayLeft + containerWidth - size.x);
+                          pos.y = clamp(pos.y - (size.y - prevSize.y) / 2, displayTop, displayTop + containerHeight - size.y);
+                          wnd->SetPixelPos(pos.x, pos.y);
+                          wnd->SetPixelSize(size.x, size.y);
+
+                          OnStaticRenderDirty();
+                          RequestRebuild();
+                       }))
+               .m_excludeFromDefault = true;
+         }
       }
 
       if (const Window* const wnd = m_isMainWindow ? m_player->m_playfieldWnd : GetOutput(m_wndId).GetWindow(); wnd->IsPositioningSupported())

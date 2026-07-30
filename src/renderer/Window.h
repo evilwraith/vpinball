@@ -94,6 +94,7 @@ public:
    void SetFocusable(const bool focusable);
 
    bool IsPositioningSupported() const { return m_isPositioningSupported; } // If false, GetPos/GetPixelPos/SetPos/SetPixelPos will all fail, thanks Wayland
+   bool IsSizingSupported() const { return m_isSizingSupported; } // If false, SetSize/SetPixelSize do nothing (KMSDRM: a window is the panel)
 
    void SetBackBuffer(RenderTarget* rt, const bool wcgBackbuffer = false);
    RenderTarget* GetBackBuffer() const { return m_backBuffer; }
@@ -148,6 +149,7 @@ private:
    bool m_wcgDisplay = false;
    bool m_wcgBackbuffer = false;
    bool m_isPositioningSupported = true;
+   bool m_isSizingSupported = true;
    const bool m_isVR;
 
    class RenderTarget* m_backBuffer = nullptr;
