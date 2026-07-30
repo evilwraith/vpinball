@@ -8,6 +8,36 @@
 #include "renderer/Renderer.h"
 #include "standalone/MachineClass.h"
 
+namespace
+{
+// VPINBALL/4kp: the ONLY place Standalone/BackBufferScale is interpreted. The scanout buffer size and
+// the renderer's pixel size are both derived from it and are set far apart; if they ever disagree the
+// GPU renders at one size into a buffer of another, which does not fail, it just looks wrong.
+//
+// Rendering below native and letting the display controller upscale is only a sensible trade on the
+// 4K playfield. On a 1080p panel the usual 0.5 would render 960x540, so the value is ignored there
+// (tables copied from an ALP4K carry it) unless Standalone/ForceBackBufferScale is set.
+float GetEffectiveBackBufferScale(const Settings& settings, const int panelWidth)
+{
+   if (!settings.GetStandalone_4kpPlaneScale())
+      return 1.0f;
+
+   const float scale = settings.GetStandalone_BackBufferScale();
+   if (scale >= 1.0f || scale <= 0.0f)
+      return 1.0f;
+
+   if (!VP::Machine::IsFourKPlayfield(panelWidth) && !settings.GetStandalone_ForceBackBufferScale())
+   {
+      PLOGI << "BackBufferScale=" << scale << " ignored: the " << panelWidth
+            << "px-wide playfield is not 4K, so it would render below 1080p and upscale. "
+               "Set Standalone/ForceBackBufferScale to honour it anyway.";
+      return 1.0f;
+   }
+
+   return scale;
+}
+}
+
 #include <SDL3/SDL_video.h>
 
 #ifdef _MSC_VER
@@ -266,8 +296,30 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
       SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, wnd_flags);
       if (g_isAndroid)
          SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_EXTERNAL_GRAPHICS_CONTEXT_BOOLEAN, true);
+      // VPINBALL/4kp: ask SDL for a scanout buffer smaller than the panel so VOP2 upscales at
+      // scanout, instead of the GPU rendering and writing a full 4K surface every frame. Must be set
+      // BEFORE the window exists -- that is when the GBM surface is created.
+      if (m_windowId == VPXWindowId::VPXWINDOW_Playfield)
+      {
+         const float scale = GetEffectiveBackBufferScale(settings, selectedDisplay.videomode.GetPixelWidth());
+         if (scale != 1.0f)
+         {
+            const int surfaceW = max(16, (int)((float)selectedDisplay.videomode.GetPixelWidth() * scale));
+            const int surfaceH = max(16, (int)((float)selectedDisplay.videomode.GetPixelHeight() * scale));
+            SDL_SetHint("SDL_KMSDRM_SURFACE_WIDTH", std::to_string(surfaceW).c_str());
+            SDL_SetHint("SDL_KMSDRM_SURFACE_HEIGHT", std::to_string(surfaceH).c_str());
+            m_scanoutScale = scale;
+            PLOGI << "Playfield scanout " << surfaceW << 'x' << surfaceH << " for panel "
+                  << selectedDisplay.videomode.GetPixelWidth() << 'x' << selectedDisplay.videomode.GetPixelHeight()
+                  << " (BackBufferScale " << scale << "); the display controller upscales.";
+         }
+      }
+
       m_nwnd = SDL_CreateWindowWithProperties(props);
       SDL_DestroyProperties(props);
+      // Leaving these set would silently apply to every window created afterwards.
+      SDL_SetHint("SDL_KMSDRM_SURFACE_WIDTH", nullptr);
+      SDL_SetHint("SDL_KMSDRM_SURFACE_HEIGHT", nullptr);
    }
 
    // On Wayland applications may not position windows themselves, so the drag support of
@@ -292,6 +344,7 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
       SDL_SyncWindow(m_nwnd); // Wait for mode switch before gathering the window pixel size
 
    SDL_GetWindowSizeInPixels(m_nwnd, &m_pixelWidth, &m_pixelHeight);
+   ApplyScanoutScale();
    m_pixelDensity = SDL_GetWindowPixelDensity(m_nwnd);
    if (m_pixelDensity == 0.f)
    {
@@ -422,6 +475,7 @@ void Window::OnResized()
       return;
    SDL_GetWindowSize(m_nwnd, &m_width, &m_height);
    SDL_GetWindowSizeInPixels(m_nwnd, &m_pixelWidth, &m_pixelHeight);
+   ApplyScanoutScale();
 }
 
 VPX::Window::VideoMode Window::SDLtoVPXVideoMode(const SDL_DisplayMode* mode)
@@ -635,6 +689,25 @@ void RenderOutput::SetPos(int x, int y) const
       m_embeddedWindow->SetPos(x, y);
    else if (m_mode == OM_WINDOW)
       m_window->SetPos(x, y);
+}
+
+
+// SDL reports the PANEL size, because on KMSDRM the window really is the panel. When the scanout
+// buffer was deliberately created smaller, the renderer has to work in buffer pixels or it would
+// render at 4K into a 1080p surface. Applied wherever the pixel size is (re)read, so a resize cannot
+// quietly restore the panel size.
+void Window::ApplyScanoutScale()
+{
+   // Keep the panel size before scaling. The two are NOT interchangeable: the render path wants
+   // buffer pixels, but anything describing the scanout target -- above all the presenter's plane
+   // destination rect -- wants the panel. Handing the presenter the buffer size makes it present a
+   // scaled-down image into a scaled-down rect, so it renders small instead of upscaling.
+   m_panelPixelWidth = m_pixelWidth;
+   m_panelPixelHeight = m_pixelHeight;
+   if (m_scanoutScale == 1.0f)
+      return;
+   m_pixelWidth = max(16, (int)((float)m_pixelWidth * m_scanoutScale));
+   m_pixelHeight = max(16, (int)((float)m_pixelHeight * m_scanoutScale));
 }
 
 } // namespace VPX

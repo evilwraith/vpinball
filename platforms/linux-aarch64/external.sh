@@ -80,6 +80,8 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
    tar xzf SDL-${SDL_SHA}.tar.gz
    mv SDL-${SDL_SHA} SDL
    ( cd SDL && patch -p1 < "${VPX_PATCH_DIR}/sdl3-kmsdrm-force-legacy-consistency.patch" )
+   # 4kp: let VPX ask for a scanout buffer smaller than the mode, so VOP2 upscales at scanout.
+   ( cd SDL && patch -p1 < "${VPX_PATCH_DIR}/sdl3-kmsdrm-surface-size.patch" )
    cd SDL
    cmake \
       -DSDL_SHARED=ON \

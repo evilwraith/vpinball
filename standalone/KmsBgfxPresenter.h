@@ -385,10 +385,17 @@ public:
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcY, static_cast<uint64_t>(dstY)) < 0;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcW, dstW) < 0;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcH, dstH) < 0;
+         // SRC is the BUFFER, not the mode. They are equal only when rendering at native resolution;
+         // under 4kpPlaneScale the buffer is deliberately smaller and VOP2 scales SRC->CRTC at
+         // scanout, which is the whole point (it deletes the GPU upscale pass and stops the GPU
+         // writing a 4K surface). Hardcoding the mode here would tell the plane to read past the end
+         // of a smaller buffer.
+         const uint32_t srcW = gbm_bo_get_width(bo);
+         const uint32_t srcH = gbm_bo_get_height(bo);
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcX, 0) < 0;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcY, 0) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcW, (uint64_t)m_modeW << 16) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcH, (uint64_t)m_modeH << 16) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcW, (uint64_t)srcW << 16) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcH, (uint64_t)srcH << 16) < 0;
       }
 
       int ret = -1;

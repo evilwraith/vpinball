@@ -223,6 +223,18 @@ void LiveUI::UpdateScale()
          m_uiScale = max(m_uiScale, static_cast<float>(min(m_player->m_playfieldWnd->GetWidth(), m_player->m_playfieldWnd->GetHeight())) / 750.f);
       }
    }
+   // The UI is drawn into the scanout buffer, which the display controller then upscales to the
+   // panel. Every size above is derived from PANEL dimensions (display scale, and the cabinet-mode
+   // min(w,h)/750), so without this the whole UI arrives upscaled -- at BackBufferScale 0.5 the
+   // menus come out at twice the intended size. Sharpness is a separate matter: the UI is rasterised
+   // at buffer resolution either way.
+   if (!m_player->m_vrDevice)
+   {
+      const float scanoutScale = m_player->m_playfieldWnd->GetScanoutScale();
+      m_uiScale *= scanoutScale;
+      overlayScale *= scanoutScale;
+   }
+
    m_uiScale = min(m_uiScale, 10.f); // To avoid texture size overflows
 #ifdef __LIBVPINBALL__
    m_uiScale *= 1.35f;

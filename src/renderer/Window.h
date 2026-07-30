@@ -95,6 +95,14 @@ public:
    void SetFocusable(const bool focusable);
 
    bool IsPositioningSupported() const { return m_isPositioningSupported; } // If false, GetPos/GetPixelPos/SetPos/SetPixelPos will all fail, thanks Wayland
+   // The panel's real size. Equals GetPixelWidth/Height unless the scanout buffer was deliberately
+   // made smaller (4kpPlaneScale), in which case those return BUFFER pixels and these the panel.
+   // <1 when the scanout buffer is smaller than the panel and the display controller upscales it.
+   // Anything sized from PANEL dimensions but drawn into the buffer must be multiplied by this, or
+   // it lands upscaled on screen.
+   float GetScanoutScale() const { return m_scanoutScale; }
+   int GetPanelPixelWidth() const { return m_panelPixelWidth; }
+   int GetPanelPixelHeight() const { return m_panelPixelHeight; }
    bool IsSizingSupported() const { return m_isSizingSupported; } // If false, SetSize/SetPixelSize do nothing (KMSDRM: a window is the panel)
 
    void SetBackBuffer(RenderTarget* rt, const bool wcgBackbuffer = false);
@@ -151,6 +159,11 @@ private:
    bool m_wcgBackbuffer = false;
    bool m_isPositioningSupported = true;
    bool m_isSizingSupported = true;
+   // 4kp: <1 when the playfield scanout buffer is deliberately smaller than the panel and the
+   // display controller upscales it. 1 everywhere else, including every non-playfield window.
+   float m_scanoutScale = 1.0f;
+   int m_panelPixelWidth = 0, m_panelPixelHeight = 0;
+   void ApplyScanoutScale();
    const bool m_isVR;
 
    class RenderTarget* m_backBuffer = nullptr;

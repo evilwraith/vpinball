@@ -8,7 +8,7 @@ set -e
 # backport/1081-phase1-log.md F17/F18.
 SDL_REPO=evilwraith/SDL
 SDL_SHA=474330f01b9ee58aa25b9498d5beff3b9180f669
-SDL_PATCHSET=kmsdrm-force-legacy-consistency-001
+SDL_PATCHSET=kmsdrm-force-legacy-consistency-surface-size-002
 SDL_IMAGE_SHA=bec9134a26c7d0f31b36d6083c25296e04cabff5
 SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
 FREEIMAGE_SHA=b1613452a0c3849d43ac877b154cf51ff9e078d3

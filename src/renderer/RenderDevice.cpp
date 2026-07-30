@@ -2286,12 +2286,14 @@ void RenderDevice::PresentKmsWindows()
          struct gbm_surface* gs = (struct gbm_surface*)SDL_GetPointerProperty(props, "SDL.window.kmsdrm.gbm_surface", nullptr);
          if (drmFd < 0 || crtcId == 0 || gs == nullptr)
             continue;
-         if (!presenter.Init(drmFd, crtcId, gs, wnd->GetPixelWidth(), wnd->GetPixelHeight()))
+         // Panel size, not buffer size -- this is the plane's DESTINATION rect (see GetPanelPixelWidth).
+         if (!presenter.Init(drmFd, crtcId, gs, wnd->GetPanelPixelWidth(), wnd->GetPanelPixelHeight()))
          {
             PLOGE << "KMS presenter init failed for CRTC " << crtcId << " (no usable primary plane); this window will not display.";
             continue;
          }
-         PLOGI << "KMS presenter ready: CRTC " << crtcId << ' ' << wnd->GetPixelWidth() << 'x' << wnd->GetPixelHeight();
+         PLOGI << "KMS presenter ready: CRTC " << crtcId << ' ' << wnd->GetPanelPixelWidth() << 'x' << wnd->GetPanelPixelHeight()
+               << " (scanout buffer " << wnd->GetPixelWidth() << 'x' << wnd->GetPixelHeight() << ')';
       }
       // Live, because it is re-read every frame: no window resize, no SDL geometry, no desktop
       // coordinates. Identity by default (scale 1, offset 0), so an unconfigured window fills its
