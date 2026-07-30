@@ -23,9 +23,45 @@ echo ""
 
 NUM_PROCS=$(nproc)
 VPX_PATCH_DIR="${VPX_PATCH_DIR:-$(cd "$(dirname "$0")/../.." && pwd)/vpx-patches}"
+VPX_REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 mkdir -p "external/linux-aarch64/${BUILD_TYPE}"
 cd "external/linux-aarch64/${BUILD_TYPE}"
+
+#
+# fetch header-only fmtlib (see FMT_SHA in config.sh)
+#
+
+FMT_EXPECTED_SHA="${FMT_SHA}"
+FMT_FOUND_SHA="$([ -f fmt/cache.txt ] && cat fmt/cache.txt || echo "")"
+
+if [ "${FMT_EXPECTED_SHA}" != "${FMT_FOUND_SHA}" ]; then
+   echo "Fetching fmt. Expected: ${FMT_EXPECTED_SHA}, Found: ${FMT_FOUND_SHA}"
+
+   rm -rf fmt
+   mkdir fmt
+   cd fmt
+
+   curl -sL https://github.com/fmtlib/fmt/archive/refs/tags/${FMT_SHA}.tar.gz -o fmt-${FMT_SHA}.tar.gz
+   tar xzf fmt-${FMT_SHA}.tar.gz
+   mv fmt-${FMT_SHA} fmt
+
+   echo "$FMT_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+# libstdc++ only gained <format> in GCC 13. The root CMakeLists puts an fmtlib-backed shim on the
+# include path for vpinball and its plugins, but the dependencies below build through their OWN cmake
+# invocations and never see it -- libpinmame has included <format> directly since f53ff084, so on a
+# GCC 12 host it fails with "fatal error: format: No such file or directory". Probe once and pass the
+# same shim through to them. On GCC 13+ this stays empty and the real header is used untouched.
+VPX_FORMAT_CXXFLAGS=""
+if ! printf '#include <format>\nint main(){return 0;}\n' \
+      | ${CXX:-c++} -std=c++20 -x c++ -fsyntax-only - > /dev/null 2>&1; then
+   VPX_FORMAT_CXXFLAGS="-I${VPX_REPO_ROOT}/third-party/include/compat/cxx-format -I$(pwd)/fmt/fmt/include"
+   echo "No libstdc++ <format>; passing the fmtlib shim to external builds"
+fi
 
 #
 # build SDL3, SDL3_image, SDL3_ttf#
@@ -198,6 +234,7 @@ if [ "${PINMAME_EXPECTED_SHA}" != "${PINMAME_FOUND_SHA}" ]; then
       -DPLATFORM=linux \
       -DARCH=aarch64 \
       -DBUILD_STATIC=OFF \
+      -DCMAKE_CXX_FLAGS="${VPX_FORMAT_CXXFLAGS}" \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
    cmake --build build -- -j${NUM_PROCS}
@@ -414,29 +451,6 @@ if [ "${LIBWINEVBS_EXPECTED_SHA}" != "${LIBWINEVBS_FOUND_SHA}" ]; then
    cd ..
 
    echo "$LIBWINEVBS_EXPECTED_SHA" > cache.txt
-
-   cd ..
-fi
-
-#
-# fetch header-only fmtlib (see FMT_SHA in config.sh)
-#
-
-FMT_EXPECTED_SHA="${FMT_SHA}"
-FMT_FOUND_SHA="$([ -f fmt/cache.txt ] && cat fmt/cache.txt || echo "")"
-
-if [ "${FMT_EXPECTED_SHA}" != "${FMT_FOUND_SHA}" ]; then
-   echo "Fetching fmt. Expected: ${FMT_EXPECTED_SHA}, Found: ${FMT_FOUND_SHA}"
-
-   rm -rf fmt
-   mkdir fmt
-   cd fmt
-
-   curl -sL https://github.com/fmtlib/fmt/archive/refs/tags/${FMT_SHA}.tar.gz -o fmt-${FMT_SHA}.tar.gz
-   tar xzf fmt-${FMT_SHA}.tar.gz
-   mv fmt-${FMT_SHA} fmt
-
-   echo "$FMT_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
