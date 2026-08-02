@@ -334,20 +334,56 @@ public:
       // Contract 3: never have two commits in flight on one CRTC.
       DrainPendingFlip();
 
+      // Contract 4: only NOW is the previously displayed buffer safe to recycle -- DrainPendingFlip
+      // has confirmed the commit that replaced it has latched. Releasing it right after committing
+      // (as this used to) hands back a buffer that is still being scanned out, and also means the
+      // pipeline never needs more than two buffers at once. GBM allocates lazily, so that suppressed
+      // allocation of a third: with only two, the producer must wait for a flip before it has
+      // anywhere to draw, which caps throughput at exactly the point frame work exceeds the vblank
+      // budget. Holding one frame longer creates the demand for a third.
+      if (m_retiredBo)
+      {
+         gbm_surface_release_buffer(m_surface, m_retiredBo);
+         m_retiredBo = nullptr;
+      }
+
       struct gbm_bo* bo = gbm_surface_lock_front_buffer(m_surface);
       if (!bo)
       {
          // Producer starvation: nothing new has been rendered. Releasing the buffer we are holding
          // lets the surface recycle it rather than deadlocking, and the next frame retries.
-         if (++m_starveCount > 3 && m_prevBo)
+         // Only ever give back the retired buffer -- m_prevBo is the one currently on screen.
+         if (++m_starveCount > 3 && m_retiredBo)
          {
-            gbm_surface_release_buffer(m_surface, m_prevBo);
-            m_prevBo = nullptr;
+            gbm_surface_release_buffer(m_surface, m_retiredBo);
+            m_retiredBo = nullptr;
             m_starveCount = 0;
          }
          return false;
       }
       m_starveCount = 0;
+
+      // How deep is this gbm_surface actually? The producer can only run ahead of scanout if the
+      // driver hands out more buffers than we hold: we keep the committed one plus the previous one,
+      // so a 2-buffer surface forces eglSwapBuffers to block until a flip retires one -- which caps
+      // throughput exactly when frame work exceeds the vblank budget. bgfx's numBackBuffers does not
+      // apply here (only the D3D11 and Vulkan backends read it), so this is driver-decided and the
+      // only way to know is to count distinct buffers. Bounded: at most kMaxTrackedBos lines per run.
+      if (m_distinctBoCount < kMaxTrackedBos)
+      {
+         bool known = false;
+         for (int i = 0; i < m_distinctBoCount; ++i)
+            if (m_seenBos[i] == bo)
+            {
+               known = true;
+               break;
+            }
+         if (!known)
+         {
+            m_seenBos[m_distinctBoCount++] = bo;
+            PLOGI.printf("[4kpDebug][gbm_slots] crtc=%u distinct scanout buffers seen: %d", m_crtcId, m_distinctBoCount);
+         }
+      }
 
       const uint32_t fbId = GetOrCreateFb(bo);
       if (fbId == 0)
@@ -415,6 +451,7 @@ public:
 
       if (ret != 0)
       {
+         // Never scanned out, so it is safe to recycle right away.
          gbm_surface_release_buffer(m_surface, bo);
          ++m_commitErrors;
          return false;
@@ -431,9 +468,10 @@ public:
             ProbeScanoutRotation(m_drmFd, m_crtcId, fbId, m_modeW, m_modeH);
       }
 
-      // Contract 4: the old buffer is only safe to recycle now that the new one is latched.
-      if (m_prevBo)
-         gbm_surface_release_buffer(m_surface, m_prevBo);
+      // The buffer this one replaces cannot be recycled yet: the commit above is NONBLOCK, so it has
+      // not latched and m_prevBo is still on screen. Hand it to the retire slot, which the next
+      // present frees once DrainPendingFlip confirms the latch.
+      m_retiredBo = m_prevBo;
       m_prevBo = bo;
       return true;
    }
@@ -441,8 +479,14 @@ public:
    void Shutdown()
    {
       DrainPendingFlip();
-      if (m_prevBo && m_surface)
-         gbm_surface_release_buffer(m_surface, m_prevBo);
+      if (m_surface)
+      {
+         if (m_retiredBo)
+            gbm_surface_release_buffer(m_surface, m_retiredBo);
+         if (m_prevBo)
+            gbm_surface_release_buffer(m_surface, m_prevBo);
+      }
+      m_retiredBo = nullptr;
       m_prevBo = nullptr;
       m_ready = false;
    }
@@ -547,7 +591,11 @@ private:
    int m_drmFd = -1;
    uint32_t m_crtcId = 0;
    struct gbm_surface* m_surface = nullptr;
-   struct gbm_bo* m_prevBo = nullptr;
+   struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
+   struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
+   static constexpr int kMaxTrackedBos = 8;
+   struct gbm_bo* m_seenBos[kMaxTrackedBos] {};
+   int m_distinctBoCount = 0;
    AtomicProps m_props;
    uint32_t m_modeW = 0, m_modeH = 0;
    float m_scale = 1.0f;      // 1 == fill the panel
