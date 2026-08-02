@@ -2,11 +2,20 @@ Enable GPU timer queries on GLES, and populate per-view stats.
 
 Two gaps rather than customisations:
 
-1. glQueryCounter, glGetQueryObjectiv and glGetQueryObjectui64v are not core in
-   GLES 3.0 -- they come from EXT_disjoint_timer_query with EXT suffixes. The GLES
-   import block asks for the unsuffixed names, so the pointers are null and
-   m_timerQuerySupport ends up false: no GPU timing at all on GLES. bgfx already
-   has GL_IMPORT_EXT__ for exactly this case; these three just did not use it.
+1. bgfx reports no GPU timing on any GLES device. glQueryCounter,
+   glGetQueryObjectiv, glGetQueryObjecti64v and glGetQueryObjectui64v are not
+   core in GLES -- they come from EXT_disjoint_timer_query with EXT suffixes,
+   and that is the only spelling a GLES driver exports. The dynamic-import
+   block asks for the unsuffixed names only, so the pointers stay null,
+   m_timerQuerySupport is forced false, and Stats::gpuTime* is always zero.
+
+   Adding an EXT line after each core line is enough: GL_EXTENSION only assigns
+   when the pointer is still NULL, so desktop GL keeps the core entry point and
+   GLES falls through to the EXT one. Note this must go in the
+   BGFX_USE_GL_DYNAMIC_LIB block -- the GLES-only block further down is
+   #elif !BGFX_USE_GL_DYNAMIC_LIB, which is dead on every platform that loads
+   GL through EGL/GLX/WGL, and there GL_EXTENSION resolves to a direct
+   declaration rather than a dlsym.
 
 2. Stats::viewStats and Stats::numViews are public API but no backend has ever
    populated them. TimerQueryGL::m_result is already sized BGFX_CONFIG_MAX_VIEWS+1
@@ -16,19 +25,27 @@ Two gaps rather than customisations:
 
 --- a/src/glimports.h
 +++ b/src/glimports.h
-@@ -706,9 +706,9 @@
- GL_IMPORT______(true,  PFNGLDELETEQUERIESPROC,                     glDeleteQueries);
- GL_IMPORT______(true,  PFNGLBEGINQUERYPROC,                        glBeginQuery);
- GL_IMPORT______(true,  PFNGLENDQUERYPROC,                          glEndQuery);
--GL_IMPORT______(true,  PFNGLGETQUERYOBJECTIVPROC,                  glGetQueryObjectiv);
--GL_IMPORT______(true,  PFNGLGETQUERYOBJECTUI64VPROC,               glGetQueryObjectui64v);
--GL_IMPORT______(true,  PFNGLQUERYCOUNTERPROC,                      glQueryCounter);
+@@ -354,9 +354,12 @@
+ GL_IMPORT______(true,  PFNGLGETCOMPRESSEDTEXTURESUBIMAGEPROC,      glGetCompressedTextureSubImage);
+ GL_IMPORT______(true,  PFNGLGETQUERYIVPROC,                        glGetQueryiv);
+ GL_IMPORT______(true,  PFNGLGETQUERYOBJECTIVPROC,                  glGetQueryObjectiv);
 +GL_IMPORT_EXT__(true,  PFNGLGETQUERYOBJECTIVPROC,                  glGetQueryObjectiv);
+ GL_IMPORT______(true,  PFNGLGETQUERYOBJECTI64VPROC,                glGetQueryObjecti64v);
++GL_IMPORT_EXT__(true,  PFNGLGETQUERYOBJECTI64VPROC,                glGetQueryObjecti64v);
+ GL_IMPORT______(true,  PFNGLGETQUERYOBJECTUIVPROC,                 glGetQueryObjectuiv);
+ GL_IMPORT______(true,  PFNGLGETQUERYOBJECTUI64VPROC,               glGetQueryObjectui64v);
 +GL_IMPORT_EXT__(true,  PFNGLGETQUERYOBJECTUI64VPROC,               glGetQueryObjectui64v);
+ GL_IMPORT______(false, PFNGLGETSHADERIVPROC,                       glGetShaderiv);
+ GL_IMPORT______(false, PFNGLGETSHADERINFOLOGPROC,                  glGetShaderInfoLog);
+ GL_IMPORT______(false, PFNGLGETSTRINGPROC,                         glGetString);
+@@ -387,6 +390,7 @@
+ GL_IMPORT______(true,  PFNGLPROVOKINGVERTEXPROC,                   glProvokingVertex);
+ GL_IMPORT______(true,  PFNGLPUSHDEBUGGROUPPROC,                    glPushDebugGroup);
+ GL_IMPORT______(true,  PFNGLQUERYCOUNTERPROC,                      glQueryCounter);
 +GL_IMPORT_EXT__(true,  PFNGLQUERYCOUNTERPROC,                      glQueryCounter);
- 
- GL_IMPORT______(true,  PFNGLDRAWARRAYSINDIRECTPROC,                glDrawArraysIndirect);
- GL_IMPORT______(true,  PFNGLDRAWELEMENTSINDIRECTPROC,              glDrawElementsIndirect);
+ GL_IMPORT______(true,  PFNGLREADBUFFERPROC,                        glReadBuffer);
+ GL_IMPORT______(false, PFNGLREADPIXELSPROC,                        glReadPixels);
+ GL_IMPORT______(true,  PFNGLRENDERBUFFERSTORAGEPROC,               glRenderbufferStorage);
 --- a/src/renderer_gl.cpp
 +++ b/src/renderer_gl.cpp
 @@ -7809,6 +7809,15 @@
