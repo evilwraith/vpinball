@@ -12,6 +12,8 @@ SDL_PATCHSET=kmsdrm-force-legacy-consistency-surface-size-002
 SDL_IMAGE_SHA=bec9134a26c7d0f31b36d6083c25296e04cabff5
 SDL_TTF_SHA=a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b
 FREEIMAGE_SHA=b1613452a0c3849d43ac877b154cf51ff9e078d3
+# 4kp: scaled decode for PNG and EXR, matching the load-size flag PluginJPEG already honours
+FREEIMAGE_PATCHSET=scaled-decode-png-exr-001
 # 4kp: header-only fmtlib, used ONLY as the <format> implementation behind
 # third-party/include/compat/cxx-format/ when the toolchain's libstdc++ has none (GCC < 13).
 # Fetched unconditionally because external.sh cannot know the compiler CMake will pick; on GCC 13+

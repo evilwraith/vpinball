@@ -137,7 +137,7 @@ fi
 # build freeimage
 #
 
-FREEIMAGE_EXPECTED_SHA="${FREEIMAGE_SHA}"
+FREEIMAGE_EXPECTED_SHA="${FREEIMAGE_SHA}-${FREEIMAGE_PATCHSET}"
 FREEIMAGE_FOUND_SHA="$([ -f freeimage/cache.txt ] && cat freeimage/cache.txt || echo "")"
 
 if [ "${FREEIMAGE_EXPECTED_SHA}" != "${FREEIMAGE_FOUND_SHA}" ]; then
@@ -151,6 +151,9 @@ if [ "${FREEIMAGE_EXPECTED_SHA}" != "${FREEIMAGE_FOUND_SHA}" ]; then
    tar xzf freeimage-${FREEIMAGE_SHA}.tar.gz
    mv freeimage-${FREEIMAGE_SHA} freeimage
    cd freeimage
+   # FORK PATCH (4kp): let PNG and EXR honour the requested load size the way PluginJPEG already
+   # does, so MaxTexDimension caps the decode itself rather than only the final image.
+   patch -p1 < "${VPX_PATCH_DIR}/freeimage-scaled-decode-png-exr.patch"
    cmake \
       -DPLATFORM=linux \
       -DARCH=aarch64 \

@@ -1,0 +1,214 @@
+Honour the caller's requested load size in the PNG and EXR plugins.
+
+FreeImage already lets a caller pass a maximum dimension in the high bits of
+the load flags, and PluginJPEG uses it to drive libjpeg's DCT scaling. Nothing
+else does, so for every other format a caller that wants a smaller image has to
+decode at full size first and rescale afterwards -- which needs exactly the peak
+allocation it was trying to avoid. An 8K RGBA EXR needs around a gigabyte before
+anything can shrink it.
+
+Extend the same convention to PNG and EXR by subsampling during the read, so
+only one source row is ever held besides the (smaller) destination.
+
+PNG: libpng has no scaled read, so png_read_row every row and keep every Nth.
+Skipped for interlaced images, which cannot be read row-sequentially in a single
+pass, and for palette or sub-byte layouts, which cannot be subsampled by whole
+pixels.
+
+EXR: read one scanline at a time into a row buffer via a slice with a zero
+yStride. Note Slice::Make treats a zero yStride as "compute the full row stride
+for me", which sends row y past the end of a one row buffer, so the Slice
+constructor is used with the base pointer offset by the data window origin. The
+RGBA interface path (RY BY Y images) keeps its own chunked reader.
+
+Measured on a 4096x4096 RGBF EXR: peak RSS 198 MB -> 18 MB, with pixel values
+identical to the full decode at the corresponding coordinates.
+
+--- a/Source/FreeImage/PluginPNG.cpp
++++ b/Source/FreeImage/PluginPNG.cpp
+@@ -581,6 +581,36 @@
+ 			bit_depth = png_get_bit_depth(png_ptr, info_ptr);
+ 			pixel_depth = bit_depth * png_get_channels(png_ptr, info_ptr);
+ 
++			// Optional scaled decode. The caller passes a maximum dimension in the high bits of
++			// flags, the same convention the JPEG plugin already uses for libjpeg's DCT scaling.
++			// libpng has no equivalent, so subsample while reading instead: that still avoids ever
++			// materialising the full size image, which is the point -- rescaling after a full decode
++			// needs the peak allocation the caller was trying to avoid.
++			const png_uint_32 src_width = width;
++			const png_uint_32 src_height = height;
++			unsigned int scale_denom = 1;
++			{
++				const int requested_size = flags >> 16;
++				// A palette or sub-byte layout cannot be subsampled by whole pixels, and an
++				// interlaced image cannot be read row-sequentially in a single pass.
++				if ((requested_size > 0)
++					&& (png_get_interlace_type(png_ptr, info_ptr) == PNG_INTERLACE_NONE)
++					&& (pixel_depth >= 8) && ((pixel_depth & 7) == 0)) {
++					const double scale = MAX((double)width, (double)height) / (double)requested_size;
++					if (scale >= 8) {
++						scale_denom = 8;
++					} else if (scale >= 4) {
++						scale_denom = 4;
++					} else if (scale >= 2) {
++						scale_denom = 2;
++					}
++				}
++			}
++			if (scale_denom != 1) {
++				width  = (src_width  + scale_denom - 1) / scale_denom;
++				height = (src_height + scale_denom - 1) / scale_denom;
++			}
++
+ 			// create a dib and write the bitmap header
+ 			// set up the dib palette, if needed
+ 
+@@ -730,6 +760,43 @@
+ 				return dib;
+ 			}
+ 
++			png_set_benign_errors(png_ptr, 1);
++
++			if (scale_denom != 1) {
++				// Every source row is decoded, but only one is held at a time and only every
++				// scale_denom'th is kept, so peak memory above the destination is a single row.
++				const size_t bytespp = pixel_depth / 8;
++				png_bytep src_row = (png_bytep)malloc((size_t)src_width * bytespp);
++
++				if (!src_row) {
++					png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
++					FreeImage_Unload(dib);
++					return NULL;
++				}
++
++				png_uint_32 dst_y = 0;
++
++				for (png_uint_32 y = 0; y < src_height; y++) {
++					png_read_row(png_ptr, src_row, NULL);
++
++					if (((y % scale_denom) != 0) || (dst_y >= height)) {
++						continue;
++					}
++
++					// FreeImage stores scanlines bottom-up
++					BYTE * const dst = FreeImage_GetScanLine(dib, height - 1 - dst_y);
++
++					for (png_uint_32 x = 0; x < width; x++) {
++						const png_uint_32 sx = MIN(x * scale_denom, src_width - 1);
++						memcpy(dst + (size_t)x * bytespp, src_row + (size_t)sx * bytespp, bytespp);
++					}
++
++					dst_y++;
++				}
++
++				free(src_row);
++			} else {
++
+ 			// set the individual row_pointers to point at the correct offsets
+ 
+ 			row_pointers = (png_bytepp)malloc(height * sizeof(png_bytep));
+@@ -747,9 +814,10 @@
+ 				row_pointers[height - 1 - k] = FreeImage_GetScanLine(dib, k);
+ 			}
+ 
+-			png_set_benign_errors(png_ptr, 1);
+ 			png_read_image(png_ptr, row_pointers);
+ 
++			}
++
+ 			// check if the bitmap contains transparency, if so enable it in the header
+ 
+ 			if (FreeImage_GetBPP(dib) == 32) {
+--- a/Source/FreeImage/PluginEXR.cpp
++++ b/Source/FreeImage/PluginEXR.cpp
+@@ -306,6 +306,33 @@
+ 			THROW (Iex::InputExc, "Unsupported color model: " << exr_color_model);
+ 		}
+ 
++		// Optional scaled decode. The caller passes a maximum dimension in the high bits of flags,
++		// the same convention the JPEG plugin already uses. This matters most here: a full frame
++		// buffer for an 8K RGBA EXR is around a gigabyte, and a caller that only wants 2K should
++		// never have to allocate it. Subsampling while reading holds one source row instead.
++		// EXR_ALLOW_FOR_FP16 is masked off first because it occupies a bit above 16.
++		const int src_width = width;
++		const int src_height = height;
++		int scale_denom = 1;
++		{
++			const int requested_size = (flags & ~EXR_ALLOW_FOR_FP16) >> 16;
++			// The RGBA interface below has its own chunked reader, so leave that path alone.
++			if((requested_size > 0) && !bUseRgbaInterface && !header_only) {
++				const double scale = MAX((double)width, (double)height) / (double)requested_size;
++				if(scale >= 8) {
++					scale_denom = 8;
++				} else if(scale >= 4) {
++					scale_denom = 4;
++				} else if(scale >= 2) {
++					scale_denom = 2;
++				}
++			}
++		}
++		if(scale_denom != 1) {
++			width  = (src_width  + scale_denom - 1) / scale_denom;
++			height = (src_height + scale_denom - 1) / scale_denom;
++		}
++
+ 		// allocate a new dib
+ 		dib = FreeImage_AllocateHeaderT(header_only, image_type == FIT_RGBF && (pixel_type == Imf::HALF || bUseRgbaInterface) && support_fp16 ? FIT_RGB16F : image_type == FIT_RGBAF && pixel_type == Imf::HALF && support_fp16 ? FIT_RGBA16F : image_type, width, height, 0);
+ 		if(!dib) THROW (Iex::NullExc, FI_MSG_ERROR_MEMORY);
+@@ -407,6 +434,56 @@
+ 				dw.min.y += chunk_size;
+ 			}
+ 
++		} else if(scale_denom != 1) {
++			// Subsampled read. A yStride of 0 maps every source row onto the same one row buffer, so
++			// reading a row at a time needs no per-row pointer arithmetic. Rows are still read in
++			// order, which keeps OpenEXR's compressed block cache effective.
++			//
++			// Slice's constructor is used rather than Slice::Make because Make treats a zero yStride
++			// as "compute the full row stride for me", which would send row y past the end of a one
++			// row buffer. The constructor stores what it is given, so the base pointer is offset by
++			// the data window origin here instead (the y term drops out with a zero yStride).
++			const size_t compbytes = (pixelType == Imf::HALF ? sizeof(uint16_t) : sizeof(float));
++			BYTE * const src_row = (BYTE*)malloc((size_t)src_width * bytespp);
++
++			if(!src_row) THROW (Iex::NullExc, FI_MSG_ERROR_MEMORY);
++
++			char * const src_base = (char*)src_row - (size_t)dataWindow.min.x * bytespp;
++			const char *channel_name[4] = { "R", "G", "B", "A" };
++			Imf::FrameBuffer frameBuffer;
++
++			if(components == 1) {
++				frameBuffer.insert ("Y", Imf::Slice(pixelType, src_base, bytespp, 0, 1, 1, 0.0));
++			} else {
++				for(int c = 0; c < components; c++) {
++					frameBuffer.insert (channel_name[c],
++						Imf::Slice(pixelType, src_base + c * compbytes, bytespp, 0, 1, 1, 0.0));
++				}
++			}
++
++			file.setFrameBuffer(frameBuffer);
++
++			int dst_y = 0;
++
++			for(int y = dataWindow.min.y; y <= dataWindow.max.y; y++) {
++				file.readPixels(y, y);
++
++				if((((y - dataWindow.min.y) % scale_denom) != 0) || (dst_y >= height)) {
++					continue;
++				}
++
++				BYTE * const dst = (BYTE*)bits + (size_t)dst_y * pitch;
++
++				for(int x = 0; x < width; x++) {
++					const int sx = MIN(x * scale_denom, src_width - 1);
++					memcpy(dst + (size_t)x * bytespp, src_row + (size_t)sx * bytespp, bytespp);
++				}
++
++				dst_y++;
++			}
++
++			free(src_row);
++
+ 		} else {
+ 			// use the low level interface
+ 

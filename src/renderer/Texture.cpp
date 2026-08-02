@@ -153,8 +153,21 @@ std::shared_ptr<BaseTexture> BaseTexture::CreateFromData(const void* data, const
          FreeImage_CloseMemory(dataHandle);
          return nullptr;
       }
+      // Ask the decoder for a downscaled image rather than decoding at full size and rescaling
+      // afterwards. FreeImage takes the target dimension in the high bits of the load flags: the
+      // JPEG plugin has always honoured it (libjpeg scales in the DCT domain), and our build adds
+      // the same for PNG and EXR (vpx-patches/freeimage-scaled-decode-png-exr.patch).
+      //
+      // This is what makes MaxTexDimension a real memory limit instead of only a final size. A
+      // 8K EXR lightmap needs about a gigabyte to decode in full before anything can shrink it,
+      // which is how a table gets OOM-killed with the resize path never running -- under Linux's
+      // default overcommit the allocation succeeds and the process dies touching the pages.
+      // Decoders that ignore the flag simply return full size and behave as before.
+      int loadFlags = 0;
+      if ((maxTexDimension > 0) && (maxTexDimension < 32768) && (fif == FIF_JPEG || fif == FIF_PNG || fif == FIF_EXR))
+         loadFlags = static_cast<int>(maxTexDimension) << 16;
       // Load
-      FIBITMAP * const dib = FreeImage_LoadFromMemory(fif, dataHandle, 0);
+      FIBITMAP * const dib = FreeImage_LoadFromMemory(fif, dataHandle, loadFlags);
       FreeImage_CloseMemory(dataHandle);
       tex = dib ? BaseTexture::CreateFromFreeImage(dib, isImageData, maxTexDimension, resizeOnLowMem) : nullptr;
    }
