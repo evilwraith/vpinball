@@ -2316,6 +2316,97 @@ void RenderDevice::PresentKmsWindows()
 }
 #endif
 
+#ifdef __RK3588__
+// Minimal periodic frame stats, deliberately in the same shape as the 10.8.0 fork's 4kpGpuTimers
+// header line so logs from the two trees can be compared directly.
+//
+// Only two numbers, but they answer the question that matters first: is a deficit on the GPU at all?
+// frames/window is ground truth for throughput and does not care that the GPU governor cannot be
+// pinned on these cabinets, while bgfx's whole-frame GPU time says how much of the frame budget the
+// GPU actually consumed. If GPU time approaches the frame period the work is on the GPU; if it sits
+// far below while frames are still slow, the cost is submit or present pacing instead.
+//
+// bgfx does not provide per-view timings on any backend (no backend populates ViewStats), so this is
+// whole-frame only. Enable with Standalone/4kpGpuTimers, matching 10.8.0.
+void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
+{
+   static bool s_enabled = false;
+   static bool s_checked = false;
+   if (!s_checked)
+   {
+      s_checked = true;
+      s_enabled = g_pplayer && g_pplayer->m_ptable
+         && g_pplayer->m_ptable->m_settings.GetStandalone_4kpGpuTimers();
+   }
+   if (!s_enabled)
+      return;
+
+   static uint64_t s_windowStartUs = 0;
+   static uint32_t s_frames = 0;
+   static double s_gpuMsSum = 0.0;
+   static uint64_t s_submitUsSum = 0;
+   static uint64_t s_presentUsSum = 0;
+   s_submitUsSum += submitUs;
+   s_presentUsSum += presentUs;
+
+   const uint64_t nowUs = usec();
+   if (s_windowStartUs == 0)
+      s_windowStartUs = nowUs;
+   ++s_frames;
+
+   // Per-view GPU times come from our bgfx patch (vpx-patches/bgfx-gles-timer-and-view-stats.patch):
+   // upstream bgfx allocates the per-view result slots and never fills them, and on GLES its timer is
+   // disabled outright because it looks for unsuffixed glQueryCounter rather than the EXT-suffixed
+   // GLES entry points. A bgfx view is a VPX pass, so this is the per-pass attribution.
+   static std::map<std::string, double> s_viewMs;
+   if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr && stats->gpuTimerFreq > 0)
+   {
+      const double toMs = 1000.0 / double(stats->gpuTimerFreq);
+      s_gpuMsSum += toMs * double(stats->gpuTimeEnd - stats->gpuTimeBegin);
+      for (uint16_t i = 0; i < stats->numViews; ++i)
+      {
+         const bgfx::ViewStats& vs = stats->viewStats[i];
+         s_viewMs[vs.name[0] ? vs.name : ("view " + std::to_string(vs.view))]
+            += toMs * double(vs.gpuTimeEnd - vs.gpuTimeBegin);
+      }
+   }
+
+   constexpr uint64_t windowUs = 5000000ULL;
+   if (nowUs - s_windowStartUs >= windowUs)
+   {
+      // bgfx reports GPU time only when its GL backend resolved the unsuffixed timer-query entry
+      // points, which it does not on GLES (they are EXT-suffixed), so gpu is usually 0 here. The
+      // wall-clock split is the useful part: submit is bgfx::frame (which blocks once the GPU queue
+      // is full, so it absorbs GPU-bound time), present is our atomic commit plus the flip wait
+      // (which absorbs vblank pacing). Whatever is left is CPU work elsewhere in the frame.
+      const double frameMs = 0.001 * double(nowUs - s_windowStartUs) / double(s_frames ? s_frames : 1);
+      const double submitMs = 0.001 * double(s_submitUsSum) / double(s_frames ? s_frames : 1);
+      const double presentMs = 0.001 * double(s_presentUsSum) / double(s_frames ? s_frames : 1);
+      PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f + other %.2f | gpu %.2f ms =====",
+         double(s_frames) * 1000000.0 / double(nowUs - s_windowStartUs), s_frames,
+         frameMs, submitMs, presentMs, frameMs - submitMs - presentMs,
+         s_frames ? s_gpuMsSum / s_frames : 0.0);
+      // Descending, so the expensive pass is the first line rather than buried.
+      std::vector<std::pair<std::string, double>> passes(s_viewMs.begin(), s_viewMs.end());
+      std::sort(passes.begin(), passes.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+      for (const auto& [name, ms] : passes)
+      {
+         const double perFrame = ms / double(s_frames ? s_frames : 1);
+         if (perFrame >= 0.005) // below this it is noise, and the list gets long
+            PLOGI.printf("[4kpDebug][gpu_timers]   %-34s %6.2f ms/frame (%4.1f%%)", name.c_str(), perFrame,
+               frameMs > 0.0 ? 100.0 * perFrame / frameMs : 0.0);
+      }
+
+      s_windowStartUs = nowUs;
+      s_frames = 0;
+      s_gpuMsSum = 0.0;
+      s_submitUsSum = 0;
+      s_presentUsSum = 0;
+      s_viewMs.clear();
+   }
+}
+#endif
+
 void RenderDevice::Flip()
 {
    // The calls below may or may not block, depending on the device configuration and the state of its frame queue. The driver may also
@@ -2346,9 +2437,15 @@ void RenderDevice::Flip()
 
    // Schedule frame presentation (non blocking call, simply queueing the present command in the driver's render queue with a schedule for execution)
    #if defined(ENABLE_BGFX)
-   SubmitAndFlipFrame(true);
    #ifdef __RK3588__
+   const uint64_t t0 = usec();
+   SubmitAndFlipFrame(true);
+   const uint64_t t1 = usec();
    PresentKmsWindows();
+   const uint64_t t2 = usec();
+   LogFrameStats(t1 - t0, t2 - t1);
+   #else
+   SubmitAndFlipFrame(true);
    #endif
 
    #elif defined(ENABLE_OPENGL)

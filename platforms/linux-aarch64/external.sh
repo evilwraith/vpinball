@@ -190,6 +190,9 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
    # That fork cannot be used wholesale: it lacks vbousquet's waitForSwapchain(), which VPX calls
    # in RenderDevice.cpp, so it does not compile against 10.8.1. Only the GBM hunks are carried.
    ( cd bgfx && patch -p1 < "${VPX_PATCH_DIR}/bgfx-kmsdrm-gbm-egl.patch" )
+   # FORK PATCH (4kp): GPU timer queries on GLES + per-view stats. Both are bgfx gaps rather than
+   # fork behaviour and are upstreamable as-is; see the header of the patch file.
+   ( cd bgfx && patch -p1 < "${VPX_PATCH_DIR}/bgfx-gles-timer-and-view-stats.patch" )
    # FORK PATCH (4kp): build BGFX GLES-only. bgfx's shared glcontext_egl binds EGL_OPENGL_API when
    # BGFX_CONFIG_RENDERER_OPENGL is enabled, and libmali on this device is GLES-only, so that call
    # fails with EGL_BAD_PARAMETER (0x300C) and BGFX aborts: "Could not set API! error: 12300".

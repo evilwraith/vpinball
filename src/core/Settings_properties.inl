@@ -1394,6 +1394,11 @@ PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, g_isStandalone);
 
 // Standalone
 PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, ""s, int, -1, -1, "Default"s, "2D"s, "Stereo 3D"s, "VR"s);
+// Periodic frame breakdown to the log: fps, where the CPU frame goes (submit vs present), and GPU
+// time both whole-frame and per pass. Same setting name as the 10.8.0 fork so a like-for-like
+// comparison needs no config difference.
+PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,
+   "Log frame rate and a GPU time breakdown per render pass every 5 seconds. RK3588 only."s, false);
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 // 4kp/HDP only. Render the playfield below the panel's native resolution and let the display
 // controller (RK3588 VOP2) upscale it at scanout. That removes a full-resolution GPU pass and stops

@@ -1,0 +1,119 @@
+Enable GPU timer queries on GLES, and populate per-view stats.
+
+Two gaps rather than customisations:
+
+1. glQueryCounter, glGetQueryObjectiv and glGetQueryObjectui64v are not core in
+   GLES 3.0 -- they come from EXT_disjoint_timer_query with EXT suffixes. The GLES
+   import block asks for the unsuffixed names, so the pointers are null and
+   m_timerQuerySupport ends up false: no GPU timing at all on GLES. bgfx already
+   has GL_IMPORT_EXT__ for exactly this case; these three just did not use it.
+
+2. Stats::viewStats and Stats::numViews are public API but no backend has ever
+   populated them. TimerQueryGL::m_result is already sized BGFX_CONFIG_MAX_VIEWS+1
+   and begin() already takes a result slot, yet every backend passes only the
+   whole-frame slot. Time each view into its own slot and publish the results, so
+   getStats() gives per-view GPU attribution.
+
+--- a/src/glimports.h
++++ b/src/glimports.h
+@@ -706,9 +706,9 @@
+ GL_IMPORT______(true,  PFNGLDELETEQUERIESPROC,                     glDeleteQueries);
+ GL_IMPORT______(true,  PFNGLBEGINQUERYPROC,                        glBeginQuery);
+ GL_IMPORT______(true,  PFNGLENDQUERYPROC,                          glEndQuery);
+-GL_IMPORT______(true,  PFNGLGETQUERYOBJECTIVPROC,                  glGetQueryObjectiv);
+-GL_IMPORT______(true,  PFNGLGETQUERYOBJECTUI64VPROC,               glGetQueryObjectui64v);
+-GL_IMPORT______(true,  PFNGLQUERYCOUNTERPROC,                      glQueryCounter);
++GL_IMPORT_EXT__(true,  PFNGLGETQUERYOBJECTIVPROC,                  glGetQueryObjectiv);
++GL_IMPORT_EXT__(true,  PFNGLGETQUERYOBJECTUI64VPROC,               glGetQueryObjectui64v);
++GL_IMPORT_EXT__(true,  PFNGLQUERYCOUNTERPROC,                      glQueryCounter);
+ 
+ GL_IMPORT______(true,  PFNGLDRAWARRAYSINDIRECTPROC,                glDrawArraysIndirect);
+ GL_IMPORT______(true,  PFNGLDRAWELEMENTSINDIRECTPROC,              glDrawElementsIndirect);
+--- a/src/renderer_gl.cpp
++++ b/src/renderer_gl.cpp
+@@ -7809,6 +7809,15 @@
+ 
+ 		uint32_t frameQueryIdx = UINT32_MAX;
+ 
++		// Per-view GPU timing. m_result is already sized BGFX_CONFIG_MAX_VIEWS+1 and begin() already
++		// takes a result slot, but every backend has only ever used the last slot (whole frame), so
++		// Stats::viewStats has never been populated by anyone. Fill the per-view slots too: a view is
++		// a pass, so this is the attribution callers actually want from getStats().
++		uint32_t viewQueryIdx = UINT32_MAX;
++		uint16_t timedView = UINT16_MAX;
++		uint32_t numTimedViews = 0;
++		uint16_t timedViewIds[BGFX_CONFIG_MAX_VIEWS];
++
+ 		if (m_timerQuerySupport)
+ 		{
+ 			frameQueryIdx = m_gpuTimer.begin(BGFX_CONFIG_MAX_VIEWS, _render->m_frameNum);
+@@ -7942,6 +7951,32 @@
+ 					setViewType(view, "  ");
+ 					BGFX_GL_PROFILER_BEGIN(view, kColorView);
+ 
++					if (m_timerQuerySupport)
++					{
++						if (UINT32_MAX != viewQueryIdx)
++						{
++							m_gpuTimer.end(viewQueryIdx);
++							viewQueryIdx = UINT32_MAX;
++						}
++						// One timed span per view id. A view submitted in several runs would otherwise
++						// overwrite its own result; keeping the first run is enough to attribute cost.
++						bool alreadyTimed = false;
++						for (uint32_t ii = 0; ii < numTimedViews; ++ii)
++						{
++							if (timedViewIds[ii] == view)
++							{
++								alreadyTimed = true;
++								break;
++							}
++						}
++						if (!alreadyTimed && numTimedViews < BX_COUNTOF(timedViewIds) )
++						{
++							timedViewIds[numTimedViews++] = view;
++							timedView = view;
++							viewQueryIdx = m_gpuTimer.begin(view, _render->m_frameNum);
++						}
++					}
++
+ 					profiler.begin(view);
+ 
+ 					viewState.m_rect = _render->m_view[view].m_rect;
+@@ -8917,6 +8952,12 @@
+ 		static double   maxGpuElapsed = 0.0f;
+ 		double elapsedGpuMs = 0.0;
+ 
++		if (UINT32_MAX != viewQueryIdx)
++		{
++			m_gpuTimer.end(viewQueryIdx);
++			viewQueryIdx = UINT32_MAX;
++		}
++
+ 		if (UINT32_MAX != frameQueryIdx)
+ 		{
+ 			m_gpuTimer.end(frameQueryIdx);
+@@ -8944,6 +8985,23 @@
+ 		perfStats.numBlit       = _render->m_numBlitItems;
+ 		perfStats.maxGpuLatency = maxGpuLatency;
+ 		perfStats.gpuFrameNum   = result.m_frameNum;
++		perfStats.numViews      = 0;
++		for (uint32_t ii = 0; ii < numTimedViews && perfStats.numViews < BGFX_CONFIG_MAX_VIEWS; ++ii)
++		{
++			const uint16_t viewId = timedViewIds[ii];
++			const TimerQueryGL::Result& viewResult = m_gpuTimer.m_result[viewId];
++			if (0 == viewResult.m_frameNum)
++			{
++				continue; // never completed a query yet
++			}
++			ViewStats& viewStats = perfStats.viewStats[perfStats.numViews++];
++			viewStats.view         = ViewId(viewId);
++			viewStats.gpuTimeBegin = viewResult.m_begin;
++			viewStats.gpuTimeEnd   = viewResult.m_end;
++			viewStats.gpuFrameNum  = viewResult.m_frameNum;
++			bx::strCopy(viewStats.name, sizeof(viewStats.name), s_viewName[viewId]);
++		}
++		BX_UNUSED(timedView);
+ 		bx::memCopy(perfStats.numPrims, statsNumPrimsRendered, sizeof(perfStats.numPrims) );
+ 		perfStats.gpuMemoryMax  = -INT64_MAX;
+ 		perfStats.gpuMemoryUsed = -INT64_MAX;

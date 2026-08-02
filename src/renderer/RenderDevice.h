@@ -150,6 +150,9 @@ public:
    // (live) RenderDevice state and operation API
 
    void Flip();
+   #ifdef __RK3588__
+   void LogFrameStats(uint64_t submitUs, uint64_t presentUs); // periodic fps + frame phase split, Standalone/4kpGpuTimers
+   #endif
    #if defined(ENABLE_BGFX) && defined(__RK3588__)
    void PresentKmsWindows(); // VPX-owned DRM present; upstream has none on KMSDRM
    #endif
