@@ -2247,8 +2247,16 @@ void RenderDevice::ResetActiveView()
    m_activeViewId = 1; // view 0 & 1 are reserved for mipmap generation (so 1 is before the first available for rendering)
 }
 
+#ifdef __RK3588__
+uint64_t RenderDevice::s_uploadUs = 0;
+uint64_t RenderDevice::s_bgfxFrameUs = 0;
+#endif
+
 void RenderDevice::SubmitAndFlipFrame(bool present)
 {
+   #ifdef __RK3588__
+   const uint64_t tSubmitBegin = usec();
+   #endif
    // Process pending texture upload/mipmap generation before flipping the frame
    for (auto it = m_pendingTextureUploads.cbegin(); it != m_pendingTextureUploads.cend();)
    {
@@ -2262,7 +2270,16 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
          ++it;
       }
    }
+   #ifdef __RK3588__
+   // The texture upload loop above sits inside the measured submit phase but outside the window
+   // bgfx reports as render thread time, so it has to be timed separately to be accounted for.
+   const uint64_t tUploads = usec();
+   #endif
    const uint32_t frameIdx = bgfx::frame(present ? BGFX_FRAME_NONE : BGFX_FRAME_FLUSH);
+   #ifdef __RK3588__
+   s_uploadUs = tUploads - tSubmitBegin;
+   s_bgfxFrameUs = usec() - tUploads;
+   #endif
    if (present)
       m_lastPresentFrameIdx = frameIdx;
    ResetActiveView();
@@ -2379,6 +2396,9 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    static std::map<std::string, PassTime> s_passes;
    static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
    static double s_renderCpuMs = 0.0, s_waitRenderMs = 0.0, s_waitSubmitMs = 0.0;
+   static uint64_t s_uploadUsSum = 0, s_bgfxFrameUsSum = 0;
+   s_uploadUsSum += s_uploadUs;
+   s_bgfxFrameUsSum += s_bgfxFrameUs;
    if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr && stats->gpuTimerFreq > 0)
    {
       const double toMs = 1000.0 / double(stats->gpuTimerFreq);
@@ -2423,8 +2443,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       const double perFrame = double(s_frames ? s_frames : 1);
       PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives",
          double(s_drawSum) / perFrame, double(s_primSum) / perFrame);
-      PLOGI.printf("[4kpDebug][gpu_timers]   render thread: %.2f ms issuing | waitRender %.2f ms | waitSubmit %.2f ms",
-         s_renderCpuMs / perFrame, s_waitRenderMs / perFrame, s_waitSubmitMs / perFrame);
+      // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
+      // bgfx thread, so bgfx::frame() runs the backend inline and neither side ever blocks on the
+      // other. What is left of bgfx::frame() after issuing is the swap, which blocks on the GPU.
+      PLOGI.printf("[4kpDebug][gpu_timers]   submit %.2f ms = uploads %.2f + bgfx::frame %.2f (of which %.2f issuing, %.2f swap)",
+         submitMs, 0.001 * double(s_uploadUsSum) / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame,
+         s_renderCpuMs / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame - s_renderCpuMs / perFrame);
       // Descending, so the expensive pass is the first line rather than buried.
       std::vector<std::pair<std::string, PassTime>> passes(s_passes.begin(), s_passes.end());
       std::sort(passes.begin(), passes.end(),
@@ -2445,6 +2469,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_passes.clear();
       s_drawSum = s_primSum = s_viewSum = 0;
       s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
+      s_uploadUsSum = s_bgfxFrameUsSum = 0;
    }
 }
 #endif
