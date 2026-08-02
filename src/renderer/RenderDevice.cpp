@@ -452,6 +452,14 @@ void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
       exit(-1);
    }
 
+   #ifdef __RK3588__
+   // Per-view GPU timing is bgfx's own Profiler (src/renderer.h), which only collects when this
+   // flag is set. Our patch makes it round-robin one view per frame and fixes the GLES timer
+   // imports; without the flag it costs nothing and reports nothing.
+   if (AreFrameStatsEnabled())
+      bgfx::setDebug(BGFX_DEBUG_PROFILER);
+   #endif
+
    // A specific backend was requested but BGFX created a different one (init.fallback let it fall back to
    // the next best because the requested backend failed to initialize), so make that explicit.
    if (init.type != bgfx::RendererType::Count && bgfx::getRendererType() != init.type)
