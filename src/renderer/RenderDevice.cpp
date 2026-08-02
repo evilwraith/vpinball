@@ -2378,10 +2378,20 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    struct PassTime { double ms; uint32_t samples; };
    static std::map<std::string, PassTime> s_passes;
    static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
+   static double s_renderCpuMs = 0.0, s_waitRenderMs = 0.0, s_waitSubmitMs = 0.0;
    if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr && stats->gpuTimerFreq > 0)
    {
       const double toMs = 1000.0 / double(stats->gpuTimerFreq);
       s_gpuMsSum += toMs * double(stats->gpuTimeEnd - stats->gpuTimeBegin);
+      // Splits the submit phase: how much of it is the render thread issuing GL calls, and how much
+      // is either thread waiting on the other. Whatever is left is the GPU.
+      if (stats->cpuTimerFreq > 0)
+      {
+         const double toCpuMs = 1000.0 / double(stats->cpuTimerFreq);
+         s_renderCpuMs  += toCpuMs * double(stats->cpuTimeEnd - stats->cpuTimeBegin);
+         s_waitRenderMs += toCpuMs * double(stats->waitRender);
+         s_waitSubmitMs += toCpuMs * double(stats->waitSubmit);
+      }
       s_drawSum += stats->numDraw;
       s_viewSum += stats->numViews;
       for (uint8_t t = 0; t < BX_COUNTOF(stats->numPrims); ++t)
@@ -2410,8 +2420,11 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          frameMs, submitMs, presentMs, frameMs - submitMs - presentMs, gpuMs, s_passes.size());
       // The GPU is busy for only part of the frame, so what bgfx::frame() spends beyond that is the
       // CPU issuing commands. These are the counts that cost drives.
+      const double perFrame = double(s_frames ? s_frames : 1);
       PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives",
-         double(s_drawSum) / double(s_frames ? s_frames : 1), double(s_primSum) / double(s_frames ? s_frames : 1));
+         double(s_drawSum) / perFrame, double(s_primSum) / perFrame);
+      PLOGI.printf("[4kpDebug][gpu_timers]   render thread: %.2f ms issuing | waitRender %.2f ms | waitSubmit %.2f ms",
+         s_renderCpuMs / perFrame, s_waitRenderMs / perFrame, s_waitSubmitMs / perFrame);
       // Descending, so the expensive pass is the first line rather than buried.
       std::vector<std::pair<std::string, PassTime>> passes(s_passes.begin(), s_passes.end());
       std::sort(passes.begin(), passes.end(),
@@ -2431,6 +2444,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_presentUsSum = 0;
       s_passes.clear();
       s_drawSum = s_primSum = s_viewSum = 0;
+      s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
    }
 }
 #endif
