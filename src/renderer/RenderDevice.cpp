@@ -2363,7 +2363,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    // upstream bgfx allocates the per-view result slots and never fills them, and on GLES its timer is
    // disabled outright because it looks for unsuffixed glQueryCounter rather than the EXT-suffixed
    // GLES entry points. A bgfx view is a VPX pass, so this is the per-pass attribution.
-   static std::map<std::string, double> s_viewMs;
+   //
+   // The patch times one view per frame, round-robin, so a pass is sampled once every N frames rather
+   // than every frame. Average per sample, not per frame, or a pass's cost scales with how many other
+   // passes the table happens to have.
+   struct PassTime { double ms; uint32_t samples; };
+   static std::map<std::string, PassTime> s_passes;
    if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr && stats->gpuTimerFreq > 0)
    {
       const double toMs = 1000.0 / double(stats->gpuTimerFreq);
@@ -2371,8 +2376,9 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       for (uint16_t i = 0; i < stats->numViews; ++i)
       {
          const bgfx::ViewStats& vs = stats->viewStats[i];
-         s_viewMs[vs.name[0] ? vs.name : ("view " + std::to_string(vs.view))]
-            += toMs * double(vs.gpuTimeEnd - vs.gpuTimeBegin);
+         PassTime& pt = s_passes[vs.name[0] ? vs.name : ("view " + std::to_string(vs.view))];
+         pt.ms += toMs * double(vs.gpuTimeEnd - vs.gpuTimeBegin);
+         ++pt.samples;
       }
    }
 
@@ -2385,27 +2391,32 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       const double frameMs = 0.001 * double(nowUs - s_windowStartUs) / double(s_frames ? s_frames : 1);
       const double submitMs = 0.001 * double(s_submitUsSum) / double(s_frames ? s_frames : 1);
       const double presentMs = 0.001 * double(s_presentUsSum) / double(s_frames ? s_frames : 1);
-      PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f + other %.2f | gpu %.2f ms =====",
+      const double gpuMs = s_frames ? s_gpuMsSum / s_frames : 0.0;
+      PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f + other %.2f | gpu %.2f ms | %zu passes =====",
          double(s_frames) * 1000000.0 / double(nowUs - s_windowStartUs), s_frames,
-         frameMs, submitMs, presentMs, frameMs - submitMs - presentMs,
-         s_frames ? s_gpuMsSum / s_frames : 0.0);
+         frameMs, submitMs, presentMs, frameMs - submitMs - presentMs, gpuMs, s_passes.size());
       // Descending, so the expensive pass is the first line rather than buried.
-      std::vector<std::pair<std::string, double>> passes(s_viewMs.begin(), s_viewMs.end());
-      std::sort(passes.begin(), passes.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-      for (const auto& [name, ms] : passes)
+      std::vector<std::pair<std::string, PassTime>> passes(s_passes.begin(), s_passes.end());
+      std::sort(passes.begin(), passes.end(),
+         [](const auto& a, const auto& b) { return a.second.ms / a.second.samples > b.second.ms / b.second.samples; });
+      double passSum = 0.0;
+      for (const auto& [name, pt] : passes)
       {
-         const double perFrame = ms / double(s_frames ? s_frames : 1);
-         if (perFrame >= 0.005) // below this it is noise, and the list gets long
-            PLOGI.printf("[4kpDebug][gpu_timers]   %-34s %6.2f ms/frame (%4.1f%%)", name.c_str(), perFrame,
-               frameMs > 0.0 ? 100.0 * perFrame / frameMs : 0.0);
+         const double perPass = pt.ms / double(pt.samples);
+         passSum += perPass;
+         if (perPass >= 0.005) // below this it is noise, and the list gets long
+            PLOGI.printf("[4kpDebug][gpu_timers]   %-40s %6.2f ms (%4.1f%% of gpu, n=%u)", name.c_str(), perPass,
+               gpuMs > 0.0 ? 100.0 * perPass / gpuMs : 0.0, pt.samples);
       }
+      if (!passes.empty())
+         PLOGI.printf("[4kpDebug][gpu_timers]   %-40s %6.2f ms over %zu passes", "(sum of passes)", passSum, passes.size());
 
       s_windowStartUs = nowUs;
       s_frames = 0;
       s_gpuMsSum = 0.0;
       s_submitUsSum = 0;
       s_presentUsSum = 0;
-      s_viewMs.clear();
+      s_passes.clear();
    }
 }
 #endif
