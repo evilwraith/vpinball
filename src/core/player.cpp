@@ -609,11 +609,16 @@ Player::Player(PinTable *const table, const PlayMode playMode)
       std::mutex mutex;
       int nLoadPerformed = 0;
       int nLoadInProgress = 0;
+      // Memory admitted to loads that have started but whose allocations are not yet visible in the
+      // system's available figure. Without it every waiting thread reads the same "plenty free" and
+      // is admitted together, which is the case that actually runs the machine out of memory.
+      size_t admittedMem = 0;
       vector<Texture *> failedPreloads;
       const unsigned int maxTexDim = static_cast<unsigned int>(m_ptable->m_settings.GetPlayer_MaxTexDimension());
-      auto loadImage = [progressPos = m_progressDialog.GetProgress() + progressPhysicLength, maxTexDim, &mutex, &nLoadInProgress, &nLoadPerformed, preloadCache, this, &failedPreloads](
+      auto loadImage = [progressPos = m_progressDialog.GetProgress() + progressPhysicLength, maxTexDim, &mutex, &nLoadInProgress, &nLoadPerformed, &admittedMem, preloadCache, this, &failedPreloads](
                           Texture *image, bool resizeOnLowMem)
       {
+         const size_t neededMem = image->GetEstimatedGPUSize() * 3; // 3x the estimated size is one for the image loader, one for the BaseTexture instance and one for the rendering API copy
          bool readyToLoad = false;
          while (!readyToLoad)
          {
@@ -623,22 +628,29 @@ Player::Player(PinTable *const table, const PlayMode playMode)
                   readyToLoad = true;
                else
                {
-                  size_t neededMem= image->GetEstimatedGPUSize() * 3; // 3x the estimated size is one for the image loader, one for the BaseTexture instance and one for the rendering API copy
                   #ifdef _MSC_VER
                      MEMORYSTATUSEX statex;
                      statex.dwLength = sizeof(statex);
                      GlobalMemoryStatusEx(&statex);
-                     readyToLoad = statex.ullAvailPhys > neededMem;
+                     readyToLoad = statex.ullAvailPhys > neededMem + admittedMem;
+                  #elif defined(__linux__)
+                     // MemAvailable, not sysinfo()'s freeram as the original sketch suggested: freeram
+                     // excludes reclaimable page cache, so on a warm system it reads near zero and
+                     // would stall every load. MemAvailable is the kernel's estimate of what can be
+                     // handed out without swapping, which is the question being asked. Reading 0 means
+                     // /proc/meminfo was unreadable, and proceeds rather than stalling.
+                     const unsigned long long availMem = read_meminfo_kb("MemAvailable:") * 1024ull;
+                     readyToLoad = (availMem == 0) || (availMem > neededMem + admittedMem);
                   #else
                      // TODO implement for other platforms
-                     // struct sysinfo memInfo;
-                     // sysinfo(&memInfo);
-                     // readyToLoad = memInfo.freeram > neededMem;
                      readyToLoad = true;
                   #endif
                }
                if (readyToLoad)
+               {
                   nLoadInProgress++;
+                  admittedMem += neededMem;
+               }
             }
             if (!readyToLoad)
                std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -698,6 +710,7 @@ Player::Player(PinTable *const table, const PlayMode playMode)
          {
             const std::lock_guard<std::mutex> lock(mutex);
             nLoadInProgress--;
+            admittedMem -= neededMem;
          }
       };
 
