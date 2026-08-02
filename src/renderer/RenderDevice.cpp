@@ -2377,10 +2377,15 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    // passes the table happens to have.
    struct PassTime { double ms; uint32_t samples; };
    static std::map<std::string, PassTime> s_passes;
+   static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
    if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr && stats->gpuTimerFreq > 0)
    {
       const double toMs = 1000.0 / double(stats->gpuTimerFreq);
       s_gpuMsSum += toMs * double(stats->gpuTimeEnd - stats->gpuTimeBegin);
+      s_drawSum += stats->numDraw;
+      s_viewSum += stats->numViews;
+      for (uint8_t t = 0; t < BX_COUNTOF(stats->numPrims); ++t)
+         s_primSum += stats->numPrims[t];
       for (uint16_t i = 0; i < stats->numViews; ++i)
       {
          const bgfx::ViewStats& vs = stats->viewStats[i];
@@ -2403,21 +2408,21 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f + other %.2f | gpu %.2f ms | %zu passes =====",
          double(s_frames) * 1000000.0 / double(nowUs - s_windowStartUs), s_frames,
          frameMs, submitMs, presentMs, frameMs - submitMs - presentMs, gpuMs, s_passes.size());
+      // The GPU is busy for only part of the frame, so what bgfx::frame() spends beyond that is the
+      // CPU issuing commands. These are the counts that cost drives.
+      PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives",
+         double(s_drawSum) / double(s_frames ? s_frames : 1), double(s_primSum) / double(s_frames ? s_frames : 1));
       // Descending, so the expensive pass is the first line rather than buried.
       std::vector<std::pair<std::string, PassTime>> passes(s_passes.begin(), s_passes.end());
       std::sort(passes.begin(), passes.end(),
          [](const auto& a, const auto& b) { return a.second.ms / a.second.samples > b.second.ms / b.second.samples; });
-      double passSum = 0.0;
       for (const auto& [name, pt] : passes)
       {
          const double perPass = pt.ms / double(pt.samples);
-         passSum += perPass;
          if (perPass >= 0.005) // below this it is noise, and the list gets long
             PLOGI.printf("[4kpDebug][gpu_timers]   %-40s %6.2f ms (%4.1f%% of gpu, n=%u)", name.c_str(), perPass,
                gpuMs > 0.0 ? 100.0 * perPass / gpuMs : 0.0, pt.samples);
       }
-      if (!passes.empty())
-         PLOGI.printf("[4kpDebug][gpu_timers]   %-40s %6.2f ms over %zu passes", "(sum of passes)", passSum, passes.size());
 
       s_windowStartUs = nowUs;
       s_frames = 0;
@@ -2425,6 +2430,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_submitUsSum = 0;
       s_presentUsSum = 0;
       s_passes.clear();
+      s_drawSum = s_primSum = s_viewSum = 0;
    }
 }
 #endif
