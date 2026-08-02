@@ -2392,7 +2392,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    // The patch times one view per frame, round-robin, so a pass is sampled once every N frames rather
    // than every frame. Average per sample, not per frame, or a pass's cost scales with how many other
    // passes the table happens to have.
-   struct PassTime { double ms; uint32_t samples; };
+   // bgfx's Profiler::end() reads m_result[view] straight after issuing the end query, so the result
+   // it publishes is whichever one last completed for that view, not the one just issued. Upstream
+   // times every view every frame, so that is at most a frame or two stale; with the round-robin
+   // patch a view is re-timed only every N frames and the same result is published in between.
+   // gpuFrameNum identifies the frame a result came from, so use it to count each result once.
+   struct PassTime { double ms; uint32_t samples; uint32_t lastFrameNum; };
    static std::map<std::string, PassTime> s_passes;
    static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
    static double s_renderCpuMs = 0.0, s_waitRenderMs = 0.0, s_waitSubmitMs = 0.0;
@@ -2420,6 +2425,9 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       {
          const bgfx::ViewStats& vs = stats->viewStats[i];
          PassTime& pt = s_passes[vs.name[0] ? vs.name : ("view " + std::to_string(vs.view))];
+         if (vs.gpuFrameNum == pt.lastFrameNum)
+            continue; // already counted this result
+         pt.lastFrameNum = vs.gpuFrameNum;
          pt.ms += toMs * double(vs.gpuTimeEnd - vs.gpuTimeBegin);
          ++pt.samples;
       }
@@ -2455,6 +2463,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          [](const auto& a, const auto& b) { return a.second.ms / a.second.samples > b.second.ms / b.second.samples; });
       for (const auto& [name, pt] : passes)
       {
+         if (pt.samples == 0)
+            continue; // no fresh result for this pass in this window
          const double perPass = pt.ms / double(pt.samples);
          if (perPass >= 0.005) // below this it is noise, and the list gets long
             PLOGI.printf("[4kpDebug][gpu_timers]   %-40s %6.2f ms (%4.1f%% of gpu, n=%u)", name.c_str(), perPass,
@@ -2466,7 +2476,11 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_gpuMsSum = 0.0;
       s_submitUsSum = 0;
       s_presentUsSum = 0;
-      s_passes.clear();
+      for (auto& [name, pt] : s_passes)
+      {
+         pt.ms = 0.0;
+         pt.samples = 0; // keep lastFrameNum: the result it refers to has already been counted
+      }
       s_drawSum = s_primSum = s_viewSum = 0;
       s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
       s_uploadUsSum = s_bgfxFrameUsSum = 0;
