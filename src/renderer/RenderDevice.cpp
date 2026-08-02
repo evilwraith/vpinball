@@ -2353,6 +2353,28 @@ void RenderDevice::PresentKmsWindows()
 //
 // Per-view timings come from our bgfx patch; see the note at the accumulation site below. Enable with
 // Standalone/4kpGpuTimers, matching 10.8.0.
+// Several passes carry a per-frame counter in their name (e.g. "Transmitted Light 940"), which would
+// shatter the aggregation into thousands of single-sample buckets and grow the table without bound.
+// Fold the digits away. Same approach as the 10.8.0 fork's profiler, so the reports line up.
+static string FoldPassName(const char* name)
+{
+   string key;
+   bool lastWasDigit = false;
+   for (const char* c = name; *c != '\0'; ++c)
+   {
+      const bool isDigit = (*c >= '0' && *c <= '9');
+      if (isDigit)
+      {
+         if (!lastWasDigit)
+            key += '#';
+      }
+      else
+         key += *c;
+      lastWasDigit = isDigit;
+   }
+   return key;
+}
+
 bool RenderDevice::AreFrameStatsEnabled()
 {
    static bool s_enabled = false;
@@ -2424,7 +2446,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       for (uint16_t i = 0; i < stats->numViews; ++i)
       {
          const bgfx::ViewStats& vs = stats->viewStats[i];
-         PassTime& pt = s_passes[vs.name[0] ? vs.name : ("view " + std::to_string(vs.view))];
+         PassTime& pt = s_passes[vs.name[0] ? FoldPassName(vs.name) : ("view " + std::to_string(vs.view))];
          if (vs.gpuFrameNum == pt.lastFrameNum)
             continue; // already counted this result
          pt.lastFrameNum = vs.gpuFrameNum;
