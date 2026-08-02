@@ -2326,9 +2326,9 @@ void RenderDevice::PresentKmsWindows()
 // GPU actually consumed. If GPU time approaches the frame period the work is on the GPU; if it sits
 // far below while frames are still slow, the cost is submit or present pacing instead.
 //
-// bgfx does not provide per-view timings on any backend (no backend populates ViewStats), so this is
-// whole-frame only. Enable with Standalone/4kpGpuTimers, matching 10.8.0.
-void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
+// Per-view timings come from our bgfx patch; see the note at the accumulation site below. Enable with
+// Standalone/4kpGpuTimers, matching 10.8.0.
+bool RenderDevice::AreFrameStatsEnabled()
 {
    static bool s_enabled = false;
    static bool s_checked = false;
@@ -2338,7 +2338,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_enabled = g_pplayer && g_pplayer->m_ptable
          && g_pplayer->m_ptable->m_settings.GetStandalone_4kpGpuTimers();
    }
-   if (!s_enabled)
+   return s_enabled;
+}
+
+void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
+{
+   if (!AreFrameStatsEnabled())
       return;
 
    static uint64_t s_windowStartUs = 0;
@@ -2374,11 +2379,9 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    constexpr uint64_t windowUs = 5000000ULL;
    if (nowUs - s_windowStartUs >= windowUs)
    {
-      // bgfx reports GPU time only when its GL backend resolved the unsuffixed timer-query entry
-      // points, which it does not on GLES (they are EXT-suffixed), so gpu is usually 0 here. The
-      // wall-clock split is the useful part: submit is bgfx::frame (which blocks once the GPU queue
-      // is full, so it absorbs GPU-bound time), present is our atomic commit plus the flip wait
-      // (which absorbs vblank pacing). Whatever is left is CPU work elsewhere in the frame.
+      // submit is bgfx::frame (which blocks once the GPU queue is full, so it absorbs GPU-bound
+      // time), present is our atomic commit plus the flip wait (which absorbs vblank pacing).
+      // Whatever is left is CPU work elsewhere in the frame.
       const double frameMs = 0.001 * double(nowUs - s_windowStartUs) / double(s_frames ? s_frames : 1);
       const double submitMs = 0.001 * double(s_submitUsSum) / double(s_frames ? s_frames : 1);
       const double presentMs = 0.001 * double(s_presentUsSum) / double(s_frames ? s_frames : 1);

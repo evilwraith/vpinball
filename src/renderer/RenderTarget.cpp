@@ -733,6 +733,9 @@ void RenderTarget::Activate(const int layer)
    m_rd->NextView();
    #ifdef _DEBUG
    bgfx::setViewName(m_rd->m_activeViewId, m_name.c_str());
+   #elif defined(__RK3588__)
+   if (RenderDevice::AreFrameStatsEnabled())
+      bgfx::setViewName(m_rd->m_activeViewId, m_name.c_str());
    #endif
    // Either bind all layers for instanced rendering or the only requested one for normal rendering (one pass per layer)
    bgfx::setViewFrameBuffer(m_rd->m_activeViewId, (layer == -1 || m_nLayers == 1) ? m_framebuffer : m_framebuffer_layers[layer]);

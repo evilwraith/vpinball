@@ -244,6 +244,11 @@ bool RenderPass::Execute(const bool log)
          bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, m_rt->GetHeight() - top, right - left, top - bottom);
       #if defined(_DEBUG)
       bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.append(" [RT=").append(m_rt->m_name).append(1,']').c_str());
+      #elif defined(__RK3588__)
+      // Not m_name.append(): that mutates the pass name, which is harmless once under _DEBUG but
+      // would grow it without bound here.
+      if (RenderDevice::AreFrameStatsEnabled())
+         bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, (m_name + " [RT=" + m_rt->m_name + ']').c_str());
       #endif
       #endif
       for (RenderCommand* cmd : m_commands)

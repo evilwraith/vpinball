@@ -152,6 +152,7 @@ public:
    void Flip();
    #ifdef __RK3588__
    void LogFrameStats(uint64_t submitUs, uint64_t presentUs); // periodic fps + frame phase split, Standalone/4kpGpuTimers
+   static bool AreFrameStatsEnabled(); // Standalone/4kpGpuTimers, also gates naming bgfx views for the per-pass report
    #endif
    #if defined(ENABLE_BGFX) && defined(__RK3588__)
    void PresentKmsWindows(); // VPX-owned DRM present; upstream has none on KMSDRM
