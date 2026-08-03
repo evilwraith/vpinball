@@ -2412,6 +2412,7 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, const VPX::Kms::Scan
 
    own.originalBackBuffer = wnd->GetBackBuffer();
    own.slot = 0;
+   own.rt[0]->RequestClear();
    wnd->SetBackBuffer(own.rt[0], false);
    own.active = true;
    PLOGI.printf("[4kpDebug][owned_scanout] window %zu redirected; cycling %d owned buffers", idx, slots.Count());
@@ -2495,6 +2496,8 @@ void RenderDevice::PresentKmsWindows()
             // Move to the next buffer for the frame about to be built, so rendering never lands in
             // the one just handed to the display.
             own.slot = (own.slot + 1) % VPX::Kms::kScanoutSlotCount;
+            // The buffer we are about to draw into still holds the frame from three frames ago.
+            own.rt[own.slot]->RequestClear();
             wnd->SetBackBuffer(own.rt[own.slot], false);
             continue;
          }

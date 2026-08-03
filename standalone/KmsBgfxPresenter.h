@@ -397,9 +397,13 @@ public:
          // and a reflect bit on its own is rejected with EINVAL. That rejection is what made the owned
          // path fall back to the EGL surface every frame while the picture still looked right -- an
          // invisible fallback is worse than a visible failure.
-         if (reflectY && m_props.rotation != 0 && SupportsReflectY())
+         // Always state the rotation explicitly rather than inheriting whatever is already on the
+         // plane: it is CRTC state that survives a process, so a session that exited badly would
+         // otherwise decide how this one looks.
+         if (m_props.rotation != 0 && SupportsReflectY())
          {
-            addFailed |= drmModeAtomicAddProperty(req, p, m_props.rotation, kRotate0 | kReflectY) < 0;
+            addFailed |= drmModeAtomicAddProperty(req, p, m_props.rotation,
+               reflectY ? (kRotate0 | kReflectY) : kRotate0) < 0;
             m_rotationTouched = true; // so it can be put back on the way out
          }
          if (fenceFd >= 0)
