@@ -374,6 +374,88 @@ public:
          PLOGE.printf("[4kpDebug][owned_scanout] pool FAILED: %s (%ux%u fourcc 0x%08x)", err.c_str(), w, h, fmt);
    }
 
+   // The atomic commit itself, shared by the gbm_surface path and the owned-slot path so the four
+   // hard contracts at the top of this file live in exactly one place. srcW/srcH describe the
+   // BUFFER, which is not the mode whenever the buffer is deliberately smaller (BackBufferScale).
+   bool CommitFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH)
+   {
+      // Contract 1: mint the fence, and close it unconditionally below.
+      const int fenceFd = CreateNativeFenceFd();
+
+      drmModeAtomicReqPtr req = drmModeAtomicAlloc();
+
+      int addFailed = 0;
+      if (req)
+      {
+         const uint32_t p = m_props.planeId;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.fbId, fbId) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcId, m_crtcId) < 0;
+         if (fenceFd >= 0)
+            addFailed |= drmModeAtomicAddProperty(req, p, m_props.inFenceFd, (uint64_t)fenceFd) < 0;
+         // Contract 2: full geometry every commit. SRC_* are 16.16 fixed point.
+         // Base rect fills the panel; the adjustment scales it about the centre and shifts it. Clamped
+         // into the CRTC because a rect hanging off the edge is rejected outright, which would drop
+         // the frame rather than merely look wrong.
+         uint32_t dstW = static_cast<uint32_t>(static_cast<float>(m_modeW) * m_scale);
+         uint32_t dstH = static_cast<uint32_t>(static_cast<float>(m_modeH) * m_scale);
+         dstW = std::clamp(dstW, 1u, m_modeW);
+         dstH = std::clamp(dstH, 1u, m_modeH);
+         int dstX = static_cast<int>((m_modeW - dstW) / 2) + m_offsetX;
+         int dstY = static_cast<int>((m_modeH - dstH) / 2) + m_offsetY;
+         dstX = std::clamp(dstX, 0, static_cast<int>(m_modeW - dstW));
+         dstY = std::clamp(dstY, 0, static_cast<int>(m_modeH - dstH));
+
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcX, static_cast<uint64_t>(dstX)) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcY, static_cast<uint64_t>(dstY)) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcW, dstW) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcH, dstH) < 0;
+         // SRC is the BUFFER, not the mode. They are equal only when rendering at native resolution;
+         // under BackBufferScale < 1 the buffer is deliberately smaller and VOP2 scales SRC->CRTC at
+         // scanout, which is the whole point (it deletes the GPU upscale pass and stops the GPU
+         // writing a 4K surface). Hardcoding the mode here would tell the plane to read past the end
+         // of a smaller buffer.
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcX, 0) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcY, 0) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcW, (uint64_t)srcW << 16) < 0;
+         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcH, (uint64_t)srcH << 16) < 0;
+      }
+
+      int ret = -1;
+      if (req && !addFailed)
+      {
+         m_flipPending = true;
+         ret = drmModeAtomicCommit(m_drmFd, req, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, this);
+         if (ret != 0)
+            m_flipPending = false;
+      }
+      if (req)
+         drmModeAtomicFree(req);
+
+      // Contract 1, unconditionally, before any branch on ret.
+      if (fenceFd >= 0)
+         close(fenceFd);
+
+      if (ret != 0)
+      {
+         ++m_commitErrors;
+         return false;
+      }
+
+      return true;
+   }
+
+
+   // Present a buffer we own rather than one the EGL surface handed us. No gbm_surface locking and
+   // no buffer release: the slots are ours for the process lifetime, so the only contract that still
+   // applies is one commit in flight per CRTC.
+   bool PresentOwnedFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH)
+   {
+      if (!m_ready || fbId == 0)
+         return false;
+      DrainPendingFlip(); // Contract 3
+      return CommitFb(fbId, srcW, srcH);
+   }
+
    // Call on the thread that owns the GL/EGL context, immediately after BGFX has swapped, so the
    // front buffer exists and eglGetCurrentDisplay() is valid for minting the fence.
    bool Present()
@@ -442,72 +524,13 @@ public:
          return false;
       }
 
-      // Contract 1: mint the fence, and close it unconditionally below.
-      const int fenceFd = CreateNativeFenceFd();
-
-      drmModeAtomicReqPtr req = drmModeAtomicAlloc();
-      int addFailed = 0;
-      if (req)
-      {
-         const uint32_t p = m_props.planeId;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.fbId, fbId) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcId, m_crtcId) < 0;
-         if (fenceFd >= 0)
-            addFailed |= drmModeAtomicAddProperty(req, p, m_props.inFenceFd, (uint64_t)fenceFd) < 0;
-         // Contract 2: full geometry every commit. SRC_* are 16.16 fixed point.
-         // Base rect fills the panel; the adjustment scales it about the centre and shifts it. Clamped
-         // into the CRTC because a rect hanging off the edge is rejected outright, which would drop
-         // the frame rather than merely look wrong.
-         uint32_t dstW = static_cast<uint32_t>(static_cast<float>(m_modeW) * m_scale);
-         uint32_t dstH = static_cast<uint32_t>(static_cast<float>(m_modeH) * m_scale);
-         dstW = std::clamp(dstW, 1u, m_modeW);
-         dstH = std::clamp(dstH, 1u, m_modeH);
-         int dstX = static_cast<int>((m_modeW - dstW) / 2) + m_offsetX;
-         int dstY = static_cast<int>((m_modeH - dstH) / 2) + m_offsetY;
-         dstX = std::clamp(dstX, 0, static_cast<int>(m_modeW - dstW));
-         dstY = std::clamp(dstY, 0, static_cast<int>(m_modeH - dstH));
-
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcX, static_cast<uint64_t>(dstX)) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcY, static_cast<uint64_t>(dstY)) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcW, dstW) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcH, dstH) < 0;
-         // SRC is the BUFFER, not the mode. They are equal only when rendering at native resolution;
-         // under BackBufferScale < 1 the buffer is deliberately smaller and VOP2 scales SRC->CRTC at
-         // scanout, which is the whole point (it deletes the GPU upscale pass and stops the GPU
-         // writing a 4K surface). Hardcoding the mode here would tell the plane to read past the end
-         // of a smaller buffer.
-         const uint32_t srcW = gbm_bo_get_width(bo);
-         const uint32_t srcH = gbm_bo_get_height(bo);
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcX, 0) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcY, 0) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcW, (uint64_t)srcW << 16) < 0;
-         addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcH, (uint64_t)srcH << 16) < 0;
-      }
-
-      int ret = -1;
-      if (req && !addFailed)
-      {
-         m_flipPending = true;
-         ret = drmModeAtomicCommit(m_drmFd, req, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, this);
-         if (ret != 0)
-            m_flipPending = false;
-      }
-      if (req)
-         drmModeAtomicFree(req);
-
-      // Contract 1, unconditionally, before any branch on ret.
-      if (fenceFd >= 0)
-         close(fenceFd);
-
-      if (ret != 0)
+      if (!CommitFb(fbId, gbm_bo_get_width(bo), gbm_bo_get_height(bo)))
       {
          // Never scanned out, so it is safe to recycle right away.
          gbm_surface_release_buffer(m_surface, bo);
-         ++m_commitErrors;
          return false;
       }
-
-      // Diagnostic only, and the answer has not changed on this hardware: VOP2 refuses rotate-90 on
+            // Diagnostic only, and the answer has not changed on this hardware: VOP2 refuses rotate-90 on
       // every plane because it needs AFBC. It costs two TEST_ONLY atomic commits per plane per CRTC
       // at startup, so run it only when debug logging is actually enabled (Release builds cap the
       // logger at info, see Logger.cpp).

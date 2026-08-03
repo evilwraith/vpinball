@@ -2349,15 +2349,46 @@ void RenderDevice::BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots)
 
       // Only build the framebuffer once the texture really is ours; otherwise it would wrap the
       // wrong storage and every later check would pass for the wrong reason.
+      // Colour plus depth: this becomes the playfield's output target, and the final composite is
+      // drawn with depth state active. A colour-only framebuffer would be accepted here and fail
+      // much later, inside a pass that expects a depth attachment.
       bgfx::FrameBufferHandle fb = BGFX_INVALID_HANDLE;
       if (tookEffect)
-         fb = bgfx::createFrameBuffer(1, &m_ownedScanoutTex[i], false);
+      {
+         const bgfx::TextureHandle depth = bgfx::createTexture2D(uint16_t(m_outputWnd[0]->GetPixelWidth()),
+            uint16_t(m_outputWnd[0]->GetPixelHeight()), false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+         if (bgfx::isValid(depth))
+         {
+            bgfx::TextureHandle attachments[2] = { m_ownedScanoutTex[i], depth };
+            fb = bgfx::createFrameBuffer(2, attachments, false);
+         }
+      }
       m_ownedScanoutFb[i] = fb;
 
       PLOGI.printf("[4kpDebug][owned_scanout] slot %d: gl texture %u -> bgfx texture %u, override returned %lu (%s), framebuffer %s",
          i, slot.texture, m_ownedScanoutTex[i].idx, (unsigned long)bound,
          tookEffect ? "MATCH" : "override did not take",
          !tookEffect ? "not built" : (bgfx::isValid(fb) ? "valid" : "INVALID"));
+   }
+
+   // Redirect the playfield's output at slot 0. One slot for now, deliberately: this proves the
+   // whole chain -- render into our buffer, fence it, commit it, see it on screen -- without also
+   // introducing cycling. There is no pacing win yet, because a single slot still forces the
+   // producer to wait for the previous flip; that arrives with the other two.
+   if (bgfx::isValid(m_ownedScanoutFb[0]))
+   {
+      m_ownedScanoutBackBuffer = new RenderTarget(this, SurfaceType::RT_DEFAULT, m_ownedScanoutFb[0],
+         m_ownedScanoutTex[0], bgfx::TextureFormat::BGRA8, BGFX_INVALID_HANDLE, bgfx::TextureFormat::D24S8,
+         "OwnedScanout0", m_outputWnd[0]->GetPixelWidth(), m_outputWnd[0]->GetPixelHeight(),
+         BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
+      m_originalBackBuffer = m_outputWnd[0]->GetBackBuffer();
+      m_outputWnd[0]->SetBackBuffer(m_ownedScanoutBackBuffer, false);
+      m_ownedScanoutActive = true;
+      PLOGI << "[4kpDebug][owned_scanout] playfield output redirected to slot 0; presenting our own framebuffer";
+   }
+   else
+   {
+      PLOGE << "[4kpDebug][owned_scanout] slot 0 framebuffer unusable; staying on the EGL surface path";
    }
 }
 
@@ -2378,6 +2409,18 @@ void RenderDevice::PresentKmsWindows()
       {
          presenter.ProbeOwnedScanout();
          BindOwnedScanoutToBgfx(presenter.GetOwnedSlots());
+      }
+
+      // Owned path: commit the buffer we rendered into, rather than whatever the EGL surface has.
+      // Any failure falls straight back to the surface path for this frame instead of dropping it.
+      if (m_ownedScanoutActive && (wnd == m_outputWnd[0]))
+      {
+         const VPX::Kms::ScanoutSlots::Slot& slot = presenter.GetOwnedSlots().GetSlot(0);
+         if (presenter.PresentOwnedFb(slot.fbId, m_outputWnd[0]->GetPixelWidth(), m_outputWnd[0]->GetPixelHeight()))
+            continue;
+         PLOGE << "[4kpDebug][owned_scanout] owned commit failed; falling back to the EGL surface path";
+         m_ownedScanoutActive = false;
+         m_outputWnd[0]->SetBackBuffer(m_originalBackBuffer, false);
       }
       if (!presenter.IsReady())
       {

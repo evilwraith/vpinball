@@ -158,6 +158,9 @@ public:
    #ifdef __RK3588__
    void BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots);
    int m_ownedScanoutBindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done
+   bool m_ownedScanoutActive = false;
+   class RenderTarget* m_ownedScanoutBackBuffer = nullptr;
+   class RenderTarget* m_originalBackBuffer = nullptr; // kept so the fallback can restore it
    bgfx::TextureHandle m_ownedScanoutTex[3] {};
    bgfx::FrameBufferHandle m_ownedScanoutFb[3] {};
    #endif
