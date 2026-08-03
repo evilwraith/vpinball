@@ -2409,20 +2409,30 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, const VPX::Kms::Scan
    own.active = true;
    PLOGI.printf("[4kpDebug][owned_scanout] window %zu redirected; cycling %d owned buffers", idx, slots.Count());
 
-   // Presentation can only be skipped once EVERY window is owned. eglSwapBuffers on any surface
-   // drains the whole context, so one window left on the EGL path re-serialises all of them --
-   // which is exactly what skipping the primary alone achieved: nothing.
-   bool allActive = !m_outputWnd.empty();
-   for (size_t i = 0; i < m_outputWnd.size(); ++i)
-      if (i >= m_ownedScanout.size() || !m_ownedScanout[i].active)
-         allActive = false;
+}
 
-   if (allActive && !m_ownedScanoutPresentSkipped)
-   {
-      m_ownedScanoutPresentSkipped = true;
-      bgfx_set_skip_present(true);
-      PLOGI << "[4kpDebug][owned_scanout] all windows owned; BGFX presentation skipped entirely";
-   }
+// Presentation can only be skipped once EVERY window is owned: eglSwapBuffers on any surface drains
+// the whole context, so one window left on the EGL path re-serialises all of them -- which is
+// exactly what skipping the primary alone achieved, namely nothing.
+//
+// Evaluated once per frame after every window has been through the loop, rather than inside the
+// per-window bind where it depended on which window happened to finish last.
+void RenderDevice::UpdateOwnedScanoutPresentSkip()
+{
+   if (m_ownedScanoutPresentSkipped || m_outputWnd.empty() || m_ownedScanout.size() < m_outputWnd.size())
+      return;
+
+   size_t active = 0;
+   for (size_t i = 0; i < m_outputWnd.size(); ++i)
+      if (m_ownedScanout[i].active)
+         ++active;
+
+   if (active != m_outputWnd.size())
+      return;
+
+   m_ownedScanoutPresentSkipped = true;
+   bgfx_set_skip_present(true);
+   PLOGI.printf("[4kpDebug][owned_scanout] all %zu windows owned; BGFX presentation skipped entirely", active);
 }
 
 void RenderDevice::PresentKmsWindows()
@@ -2445,10 +2455,12 @@ void RenderDevice::PresentKmsWindows()
          presenter.ProbeOwnedScanout();
          BindOwnedScanoutToBgfx(wndIdx, presenter.GetOwnedSlots(), wnd);
 
-         if (!m_ownedScanoutReflectLogged)
+         // Only meaningful once the presenter has discovered its plane properties; asking earlier
+         // reads a zeroed mask and always answers "not supported".
+         if (!m_ownedScanoutReflectLogged && presenter.IsReady() && (wndIdx == 0))
          {
             m_ownedScanoutReflectLogged = true;
-            PLOGI.printf("[4kpDebug][owned_scanout] plane vertical reflect: %s",
+            PLOGI.printf("[4kpDebug][owned_scanout] playfield plane vertical reflect: %s",
                presenter.SupportsReflectY() ? "supported" : "NOT SUPPORTED -- image will be upside down");
          }
       }
@@ -2505,6 +2517,8 @@ void RenderDevice::PresentKmsWindows()
       }
       presenter.Present();
    }
+   // Once every window is owned, BGFX never needs to present again.
+   UpdateOwnedScanoutPresentSkip();
 }
 #endif
 

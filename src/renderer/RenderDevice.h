@@ -174,6 +174,7 @@ public:
    bool m_ownedScanoutReflectLogged = false;
    void BindOwnedScanoutToBgfx(size_t idx, const VPX::Kms::ScanoutSlots& slots, VPX::Window* wnd);
    void DisableOwnedScanout(const char* why);
+   void UpdateOwnedScanoutPresentSkip();
    #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
