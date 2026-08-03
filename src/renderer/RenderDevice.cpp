@@ -347,13 +347,18 @@ void RenderDevice::BGFXRenderThread(RenderDevice* rd)
    bgfx::renderFrame(); // before init, so bgfx does not spawn a render thread of its own
    rd->m_bgfxPreInitDone.release();
 
-   while (rd->m_renderDeviceAlive)
+   // Loop until bgfx says Exiting, NOT until m_renderDeviceAlive goes false. bgfx::shutdown() runs
+   // on the API thread, posts an exit, and then waits for this thread to consume it through
+   // renderFrame(). Leaving early on our own flag means that exit is never consumed and shutdown
+   // blocks forever -- which is exactly what hung on close.
+   for (;;)
    {
       const bgfx::RenderFrame::Enum r = bgfx::renderFrame(16);
       if (r == bgfx::RenderFrame::Exiting)
          break;
       #ifdef __RK3588__
-      if (r == bgfx::RenderFrame::Render)
+      // Not during teardown: the presenters and windows are being freed on the other thread.
+      if (r == bgfx::RenderFrame::Render && rd->m_renderDeviceAlive)
          rd->PresentKmsWindows();
       #endif
    }
@@ -1967,10 +1972,13 @@ RenderDevice::~RenderDevice()
       g_pplayer->ProcessOSMessages(false);
       Sleep(0);
    }
-   if (m_bgfxRenderThread.joinable())
-      m_bgfxRenderThread.join(); // owns the GL context; must be gone before anything it used is freed
+   // Order matters: the API thread is the one that calls bgfx::shutdown(), and the render thread
+   // only leaves its loop once that shutdown reaches it. Joining the render thread first would wait
+   // for an exit that has not been posted yet.
    if (m_renderThread.joinable())
       m_renderThread.join();
+   if (m_bgfxRenderThread.joinable())
+      m_bgfxRenderThread.join();
 
 #elif defined(ENABLE_OPENGL)
    m_quadPNTDynMeshBuffer = nullptr;
