@@ -2296,9 +2296,18 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // scans the front buffer out (see standalone/KmsBgfxPresenter.h). Drive one presenter per output
 // window from the render thread, right after BGFX has swapped, so the front buffer exists and the
 // EGL context is current for minting the IN_FENCE_FD.
+static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
+
+// Give every presenter the chance to hand back a buffer whose flip has already latched, before the
+// producer goes looking for one to draw into.
+void RenderDevice::RecycleKmsBuffers()
+{
+   for (auto& [wnd, presenter] : s_presenters)
+      presenter.RecycleCompletedFlip();
+}
+
 void RenderDevice::PresentKmsWindows()
 {
-   static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
 
    for (VPX::Window* wnd : m_outputWnd)
    {
@@ -2560,6 +2569,7 @@ void RenderDevice::Flip()
    // Schedule frame presentation (non blocking call, simply queueing the present command in the driver's render queue with a schedule for execution)
    #if defined(ENABLE_BGFX)
    #ifdef __RK3588__
+   RecycleKmsBuffers();
    const uint64_t t0 = usec();
    SubmitAndFlipFrame(true);
    const uint64_t t1 = usec();
