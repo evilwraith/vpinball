@@ -187,6 +187,12 @@ PropBool(Player, UseNVidiaAPI, "Alternative Depth Buffer"s, "Use NVidia API to m
 PropBool(Player, SoftwareVertexProcessing, "Software Vertex Processing"s, "Activate this on a DirectX 9 build, if you have issues using an old Intel graphics chip"s, false);
 PropBool(Player, DisableAO, "Disable Ambient Occlusion"s, ""s, false);
 PropBool(Player, DynamicAO, "Dynamic Ambient Occlusion"s, ""s, true);
+// Reflections have had a global quality control for a long time (PFReflection below); refraction has
+// not, so the only way to turn it off was per-table script clearing every RefractionProbe name. This
+// is the global equivalent: it makes primitives resolve no refraction probe, exactly as an empty name
+// does, so the probe is never rendered.
+PropBool(Player, Refraction, "Screen Space Refraction"s,
+   "Render refraction through transparent parts.\nDisabling skips the screen space refraction probes entirely, which is a large saving on tables that use them."s, true);
 PropEnum(Player, PFReflection, "Reflection Quality"s,
    "Limit the quality of reflections for better performance.\n'Dynamic' is recommended and will give the best results, but may harm performance.\n'Static Only' has no performance cost (except for VR rendering).\nOther options feature different trade-offs between quality and performance."s,
    int, 5, "Disable Reflections"s, "Balls Only"s, "Static Only"s, "Static & Balls"s, "Static & Unsynced Dynamic"s, "Dynamic"s);
@@ -212,6 +218,22 @@ PropEnum(Player, Sharpen, "Post processed sharpening"s, "Select between differen
 // Ball rendering
 PropBool(Player, BallAntiStretch, "Unstretch Ball"s, "Compensate ball stretching"s, false);
 PropBool(Player, DisableLightingForBalls, "Disable Ball Lighting"s, "Disable lighting and reflection effects on balls, e.g. to help the visually handicapped"s, false);
+// Raytraced ball shadows are evaluated per pixel for every lit fragment, looping over the ball array
+// in ball_shadows.sh. On a tile GPU that is a large share of the light and basic passes. Turning this
+// off costs one comparison per fragment: the shader already early-outs on the first ball with radius
+// zero, so the renderer simply stops filling the array.
+// Baked lightmap overlays (VLM and similar) are additive quads whose alpha tracks their driving
+// light's intensity. A table can stack dozens of them, and the ones that are nearly off still cost a
+// full additive pass over their area. This raises the existing "nothing to add" early-out from
+// exactly zero to a threshold, so barely-contributing overlays are skipped.
+//
+// Deterministic by construction: alpha follows the light's smooth intensity, so the same overlays
+// drop on consecutive frames rather than flickering. 0 keeps the original behaviour exactly.
+PropFloat(Player, LightmapMinIntensity, "Lightmap Cutoff"s,
+   "Skip additive lightmap overlays contributing less than this.\nRaises the threshold below which a baked lightmap is considered to add nothing. 0 draws them all."s,
+   0.f, 0.25f, 0.f);
+PropBool(Player, RaytracedBallShadows, "Raytraced Ball Shadows"s,
+   "Cast per-pixel raytraced ball shadows from bulb lights.\nDisabling keeps the lighting but drops the shadows, which is a significant saving on lower-end GPUs."s, true);
 PropBool(Player, BallTrail, "Ball Trail"s, "Legacy Ball Trails.\nWill/should be replaced by ForceMotionBlurOff with the next release"s, false);
 PropFloat(Player, BallTrailStrength, "Ball Trail Strength"s, "Strength of the legacy Ball Trail"s, 0.f, 5.f, 0.5f);
 PropBool(Player, OverwriteBallImage, "Overwrite ball image"s, "Allow to define images that will be used instead of the table's provided one"s, false);
@@ -1397,6 +1419,10 @@ PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, "
 // Periodic frame breakdown to the log: fps, where the CPU frame goes (submit vs present), and GPU
 // time both whole-frame and per pass. Same setting name as the 10.8.0 fork so a like-for-like
 // comparison needs no config difference.
+// Frame pacing phase 2. Currently probe-only: builds the owned scanout pool once at startup and
+// reports whether this driver accepts it, without changing how anything renders.
+PropBool(Standalone, 4kpOwnedScanout, "Owned playfield scanout buffers"s,
+   "Render the playfield into VPX-owned scanout buffers instead of the EGL surface, so the CPU no longer blocks on GPU completion. RK3588 only."s, false);
 PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,
    "Log frame rate and a GPU time breakdown per render pass every 5 seconds. RK3588 only."s, false);
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);

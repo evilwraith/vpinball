@@ -2307,6 +2307,10 @@ void RenderDevice::PresentKmsWindows()
          continue;
 
       VPX::Kms::WindowPresenter& presenter = s_presenters[core];
+      // Playfield only: it is the surface whose swap blocks, and the only one worth restructuring.
+      if ((wnd == m_outputWnd[0]) && g_pplayer && g_pplayer->m_ptable
+         && g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout())
+         presenter.ProbeOwnedScanout();
       if (!presenter.IsReady())
       {
          const SDL_PropertiesID props = SDL_GetWindowProperties(core);

@@ -42,6 +42,8 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include "KmsScanoutSlots.h"
+
 namespace VPX::Kms
 {
 
@@ -324,6 +326,37 @@ public:
       return m_ready;
    }
 
+   // Frame pacing phase 2, step 1: prove the pool can actually be built on this driver before any
+   // of the render path is restructured around it. Runs once, allocates the three slots, imports
+   // each into GL and registers a DRM framebuffer, reports, then tears the pool back down. Nothing
+   // renders into it yet.
+   //
+   // Uses a live surface buffer as the template so the slots match what the display is already
+   // accepting -- guessing the format or the modifier is the easiest way to get a pool that builds
+   // and then fails at commit time.
+   void ProbeOwnedScanout()
+   {
+      if (m_ownedScanoutProbed || !m_ready || m_prevBo == nullptr)
+         return;
+      m_ownedScanoutProbed = true;
+
+      const uint32_t w = gbm_bo_get_width(m_prevBo);
+      const uint32_t h = gbm_bo_get_height(m_prevBo);
+      const uint32_t fmt = gbm_bo_get_format(m_prevBo);
+
+      ScanoutSlots slots;
+      std::string err;
+      const bool ok = slots.Init(m_drmFd, gbm_bo_get_device(m_prevBo), eglGetCurrentDisplay(), w, h, fmt, err);
+
+      if (ok)
+         PLOGI.printf("[4kpDebug][owned_scanout] probe OK: %d slots %ux%u fourcc 0x%08x, imported to GL and registered as DRM framebuffers",
+            slots.Count(), w, h, fmt);
+      else
+         PLOGE.printf("[4kpDebug][owned_scanout] probe FAILED: %s (%ux%u fourcc 0x%08x)", err.c_str(), w, h, fmt);
+
+      slots.Destroy();
+   }
+
    // Call on the thread that owns the GL/EGL context, immediately after BGFX has swapped, so the
    // front buffer exists and eglGetCurrentDisplay() is valid for minting the fence.
    bool Present()
@@ -591,6 +624,7 @@ private:
    int m_drmFd = -1;
    uint32_t m_crtcId = 0;
    struct gbm_surface* m_surface = nullptr;
+   bool m_ownedScanoutProbed = false;
    struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
    struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
    static constexpr int kMaxTrackedBos = 8;
