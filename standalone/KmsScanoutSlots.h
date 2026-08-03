@@ -252,30 +252,27 @@ private:
    static inline CheckFramebufferStatusFn s_glCheckFramebufferStatus = nullptr;
    static inline DeleteFramebuffersFn s_glDeleteFramebuffers = nullptr;
 
+   // eglGetProcAddress, not dlsym. libGLESv2.so.2 on this device is a ~5 KB stub that only pulls in
+   // libmali.so.1 and exports none of GL itself; dlsym on its handle still resolves through the
+   // dependency and returns a non-null pointer that is not safely callable here -- which is how the
+   // first attempt passed its null checks and then segfaulted on the first call.
+   // eglGetProcAddress returns the entry point belonging to the current context's implementation,
+   // which is the one BGFX is already driving.
    static bool ResolveGl(std::string& error)
    {
       if (s_glGenTextures != nullptr)
          return true;
 
-      void* lib = dlopen("libGLESv2.so.2", RTLD_LAZY | RTLD_NOLOAD); // already loaded by BGFX
-      if (lib == nullptr)
-         lib = dlopen("libGLESv2.so.2", RTLD_LAZY);
-      if (lib == nullptr)
-      {
-         error = "dlopen(libGLESv2.so.2) failed";
-         return false;
-      }
-
-      s_glGenTextures = (GenTexturesFn)dlsym(lib, "glGenTextures");
-      s_glBindTexture = (BindTextureFn)dlsym(lib, "glBindTexture");
-      s_glDeleteTextures = (DeleteTexturesFn)dlsym(lib, "glDeleteTextures");
-      s_glGetError = (GetErrorFn)dlsym(lib, "glGetError");
-      s_glTexParameteri = (TexParameteriFn)dlsym(lib, "glTexParameteri");
-      s_glGenFramebuffers = (GenFramebuffersFn)dlsym(lib, "glGenFramebuffers");
-      s_glBindFramebuffer = (BindFramebufferFn)dlsym(lib, "glBindFramebuffer");
-      s_glFramebufferTexture2D = (FramebufferTexture2DFn)dlsym(lib, "glFramebufferTexture2D");
-      s_glCheckFramebufferStatus = (CheckFramebufferStatusFn)dlsym(lib, "glCheckFramebufferStatus");
-      s_glDeleteFramebuffers = (DeleteFramebuffersFn)dlsym(lib, "glDeleteFramebuffers");
+      s_glGenTextures = (GenTexturesFn)eglGetProcAddress("glGenTextures");
+      s_glBindTexture = (BindTextureFn)eglGetProcAddress("glBindTexture");
+      s_glDeleteTextures = (DeleteTexturesFn)eglGetProcAddress("glDeleteTextures");
+      s_glGetError = (GetErrorFn)eglGetProcAddress("glGetError");
+      s_glTexParameteri = (TexParameteriFn)eglGetProcAddress("glTexParameteri");
+      s_glGenFramebuffers = (GenFramebuffersFn)eglGetProcAddress("glGenFramebuffers");
+      s_glBindFramebuffer = (BindFramebufferFn)eglGetProcAddress("glBindFramebuffer");
+      s_glFramebufferTexture2D = (FramebufferTexture2DFn)eglGetProcAddress("glFramebufferTexture2D");
+      s_glCheckFramebufferStatus = (CheckFramebufferStatusFn)eglGetProcAddress("glCheckFramebufferStatus");
+      s_glDeleteFramebuffers = (DeleteFramebuffersFn)eglGetProcAddress("glDeleteFramebuffers");
 
       if (s_glGenTextures == nullptr || s_glBindTexture == nullptr
        || s_glDeleteTextures == nullptr || s_glGetError == nullptr
@@ -283,10 +280,16 @@ private:
        || s_glBindFramebuffer == nullptr || s_glFramebufferTexture2D == nullptr
        || s_glCheckFramebufferStatus == nullptr || s_glDeleteFramebuffers == nullptr)
       {
-         error = "libGLESv2.so.2 is missing core texture entry points";
+         error = "eglGetProcAddress could not resolve the core GL entry points (needs "
+                 "EGL_KHR_get_all_proc_addresses for non-extension functions)";
          s_glGenTextures = nullptr;
          return false;
       }
+
+      // Cheap liveness check before anything relies on these. glGetError on a current context is
+      // harmless and touches the same dispatch path the rest will, so a bad resolve shows up here
+      // rather than as a fault three calls later.
+      s_glGetError();
       return true;
    }
 
