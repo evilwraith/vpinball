@@ -349,7 +349,7 @@ public:
       const bool ok = slots.Init(m_drmFd, gbm_bo_get_device(m_prevBo), eglGetCurrentDisplay(), w, h, fmt, err);
 
       if (ok)
-         PLOGI.printf("[4kpDebug][owned_scanout] probe OK: %d slots %ux%u fourcc 0x%08x, imported to GL and registered as DRM framebuffers",
+         PLOGI.printf("[4kpDebug][owned_scanout] probe OK: %d slots %ux%u fourcc 0x%08x -- imported to GL, framebuffer complete, registered with DRM",
             slots.Count(), w, h, fmt);
       else
          PLOGE.printf("[4kpDebug][owned_scanout] probe FAILED: %s (%ux%u fourcc 0x%08x)", err.c_str(), w, h, fmt);

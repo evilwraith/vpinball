@@ -56,6 +56,7 @@ public:
       struct gbm_bo* bo = nullptr;
       EGLImageKHR image = EGL_NO_IMAGE_KHR;
       GLuint texture = 0;
+      GLuint fbo = 0;
       uint32_t fbId = 0;
       bool inFlight = false; // committed, not yet confirmed latched
    };
@@ -113,32 +114,15 @@ public:
             return false;
          }
 
-         const int dmaFd = gbm_bo_get_fd(slot.bo);
-         if (dmaFd < 0)
-         {
-            error = "gbm_bo_get_fd failed for slot " + std::to_string(i);
-            Destroy();
-            return false;
-         }
-
          const uint32_t stride = gbm_bo_get_stride(slot.bo);
-         const uint64_t modifier = gbm_bo_get_modifier(slot.bo);
 
-         EGLint attribs[] = {
-            EGL_WIDTH, (EGLint)width,
-            EGL_HEIGHT, (EGLint)height,
-            EGL_LINUX_DRM_FOURCC_EXT, (EGLint)format,
-            EGL_DMA_BUF_PLANE0_FD_EXT, dmaFd,
-            EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
-            EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)stride,
-            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, (EGLint)(modifier & 0xFFFFFFFFu),
-            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, (EGLint)(modifier >> 32),
-            EGL_NONE
-         };
-
-         slot.image = createImage(display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
-         // EGL dups the fd it needs; ours is ours to close either way.
-         close(dmaFd);
+         // EGL_NATIVE_PIXMAP_KHR with the gbm_bo itself, not EGL_LINUX_DMA_BUF_EXT with an fd and
+         // modifier attributes. Both create an image on this driver, but the dma_buf one comes back
+         // usable only as an external texture: binding it to GL_TEXTURE_2D fails with
+         // GL_INVALID_OPERATION, and an external texture cannot be a render target. current-gl
+         // reached the same conclusion; this is its path.
+         slot.image = createImage(display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR,
+            reinterpret_cast<EGLClientBuffer>(slot.bo), nullptr);
 
          if (slot.image == EGL_NO_IMAGE_KHR)
          {
@@ -150,6 +134,12 @@ public:
 
          s_glGenTextures(1, &slot.texture);
          s_glBindTexture(GL_TEXTURE_2D, slot.texture);
+         // Set before the import: the sampler state has to be complete for the imported image, and
+         // an imported EGLImage has no mip chain, so anything mip-filtered would be incomplete.
+         s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+         s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+         s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+         s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
          imageTargetTexture(GL_TEXTURE_2D, (GLeglImageOES)slot.image);
          const GLenum glErr = s_glGetError();
          s_glBindTexture(GL_TEXTURE_2D, 0);
@@ -157,6 +147,22 @@ public:
          {
             error = "glEGLImageTargetTexture2DOES failed for slot " + std::to_string(i) + " (gl error 0x"
                + std::to_string(glErr) + ')';
+            Destroy();
+            return false;
+         }
+
+         // Importing is not enough -- the buffer has to work as a render target. A texture that
+         // imports cleanly and then yields an incomplete framebuffer would fail later, at the point
+         // where it is much harder to attribute.
+         s_glGenFramebuffers(1, &slot.fbo);
+         s_glBindFramebuffer(GL_FRAMEBUFFER, slot.fbo);
+         s_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot.texture, 0);
+         const GLenum fboStatus = s_glCheckFramebufferStatus(GL_FRAMEBUFFER);
+         s_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+         if (fboStatus != GL_FRAMEBUFFER_COMPLETE)
+         {
+            error = "framebuffer incomplete for slot " + std::to_string(i) + " (status 0x"
+               + std::to_string(fboStatus) + ')';
             Destroy();
             return false;
          }
@@ -203,6 +209,8 @@ public:
       {
          if (slot.fbId != 0 && m_drmFd >= 0)
             drmModeRmFB(m_drmFd, slot.fbId);
+         if (slot.fbo != 0 && s_glDeleteFramebuffers != nullptr)
+            s_glDeleteFramebuffers(1, &slot.fbo);
          if (slot.texture != 0 && s_glDeleteTextures != nullptr)
             s_glDeleteTextures(1, &slot.texture);
          if (slot.image != EGL_NO_IMAGE_KHR && m_destroyImage != nullptr)
@@ -219,11 +227,23 @@ private:
    typedef void   (GL_APIENTRYP BindTextureFn)(GLenum, GLuint);
    typedef void   (GL_APIENTRYP DeleteTexturesFn)(GLsizei, const GLuint*);
    typedef GLenum (GL_APIENTRYP GetErrorFn)(void);
+   typedef void   (GL_APIENTRYP TexParameteriFn)(GLenum, GLenum, GLint);
+   typedef void   (GL_APIENTRYP GenFramebuffersFn)(GLsizei, GLuint*);
+   typedef void   (GL_APIENTRYP BindFramebufferFn)(GLenum, GLuint);
+   typedef void   (GL_APIENTRYP FramebufferTexture2DFn)(GLenum, GLenum, GLenum, GLuint, GLint);
+   typedef GLenum (GL_APIENTRYP CheckFramebufferStatusFn)(GLenum);
+   typedef void   (GL_APIENTRYP DeleteFramebuffersFn)(GLsizei, const GLuint*);
 
    static inline GenTexturesFn s_glGenTextures = nullptr;
    static inline BindTextureFn s_glBindTexture = nullptr;
    static inline DeleteTexturesFn s_glDeleteTextures = nullptr;
    static inline GetErrorFn s_glGetError = nullptr;
+   static inline TexParameteriFn s_glTexParameteri = nullptr;
+   static inline GenFramebuffersFn s_glGenFramebuffers = nullptr;
+   static inline BindFramebufferFn s_glBindFramebuffer = nullptr;
+   static inline FramebufferTexture2DFn s_glFramebufferTexture2D = nullptr;
+   static inline CheckFramebufferStatusFn s_glCheckFramebufferStatus = nullptr;
+   static inline DeleteFramebuffersFn s_glDeleteFramebuffers = nullptr;
 
    static bool ResolveGl(std::string& error)
    {
@@ -243,9 +263,18 @@ private:
       s_glBindTexture = (BindTextureFn)dlsym(lib, "glBindTexture");
       s_glDeleteTextures = (DeleteTexturesFn)dlsym(lib, "glDeleteTextures");
       s_glGetError = (GetErrorFn)dlsym(lib, "glGetError");
+      s_glTexParameteri = (TexParameteriFn)dlsym(lib, "glTexParameteri");
+      s_glGenFramebuffers = (GenFramebuffersFn)dlsym(lib, "glGenFramebuffers");
+      s_glBindFramebuffer = (BindFramebufferFn)dlsym(lib, "glBindFramebuffer");
+      s_glFramebufferTexture2D = (FramebufferTexture2DFn)dlsym(lib, "glFramebufferTexture2D");
+      s_glCheckFramebufferStatus = (CheckFramebufferStatusFn)dlsym(lib, "glCheckFramebufferStatus");
+      s_glDeleteFramebuffers = (DeleteFramebuffersFn)dlsym(lib, "glDeleteFramebuffers");
 
       if (s_glGenTextures == nullptr || s_glBindTexture == nullptr
-       || s_glDeleteTextures == nullptr || s_glGetError == nullptr)
+       || s_glDeleteTextures == nullptr || s_glGetError == nullptr
+       || s_glTexParameteri == nullptr || s_glGenFramebuffers == nullptr
+       || s_glBindFramebuffer == nullptr || s_glFramebufferTexture2D == nullptr
+       || s_glCheckFramebufferStatus == nullptr || s_glDeleteFramebuffers == nullptr)
       {
          error = "libGLESv2.so.2 is missing core texture entry points";
          s_glGenTextures = nullptr;
