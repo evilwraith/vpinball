@@ -2296,6 +2296,51 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // scans the front buffer out (see standalone/KmsBgfxPresenter.h). Drive one presenter per output
 // window from the render thread, right after BGFX has swapped, so the front buffer exists and the
 // EGL context is current for minting the IN_FENCE_FD.
+// Frame pacing phase 2, step 2a: hand the slot textures to BGFX and build a framebuffer over each.
+//
+// This is the step with the real unknown in it. bgfx::overrideInternal swaps a bgfx texture's
+// backing for an externally created GL texture, but nothing promises it will accept one that is
+// EGLImage-backed rather than allocated by the driver in the usual way, nor that a framebuffer built
+// over the result will be valid. Find that out here, where the answer costs a log line -- the render
+// path is not redirected yet, so a failure changes nothing.
+//
+// Verified rather than assumed: getInternal() must hand back the same GL id we supplied, since
+// overrideInternal returning silently without taking effect would otherwise look identical to
+// success right up until the display showed the wrong buffer.
+void RenderDevice::BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots)
+{
+   static bool s_bound = false;
+   if (s_bound || !slots.IsReady())
+      return;
+   s_bound = true;
+
+   for (int i = 0; i < slots.Count(); ++i)
+   {
+      const VPX::Kms::ScanoutSlots::Slot& slot = slots.GetSlot(i);
+
+      // BGFX_TEXTURE_RT so bgfx treats it as attachable; the contents are replaced wholesale by
+      // overrideInternal, so the allocation bgfx makes here is transient.
+      bgfx::TextureHandle tex = bgfx::createTexture2D(uint16_t(m_outputWnd[0]->GetPixelWidth()),
+         uint16_t(m_outputWnd[0]->GetPixelHeight()), false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+      if (!bgfx::isValid(tex))
+      {
+         PLOGE.printf("[4kpDebug][owned_scanout] slot %d: bgfx::createTexture2D failed", i);
+         return;
+      }
+
+      // overrideInternal hands back the native pointer for the texture, so its return value is the
+      // confirmation that the swap took rather than being silently ignored.
+      const uintptr_t bound = bgfx::overrideInternal(tex, uintptr_t(slot.texture));
+
+      bgfx::FrameBufferHandle fb = bgfx::createFrameBuffer(1, &tex, false);
+
+      PLOGI.printf("[4kpDebug][owned_scanout] slot %d: gl texture %u -> bgfx texture %u (override returned %lu, %s), framebuffer %s",
+         i, slot.texture, tex.idx, (unsigned long)bound,
+         bound == uintptr_t(slot.texture) ? "MATCH" : "differs -- check before relying on it",
+         bgfx::isValid(fb) ? "valid" : "INVALID");
+   }
+}
+
 void RenderDevice::PresentKmsWindows()
 {
    static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
@@ -2310,7 +2355,10 @@ void RenderDevice::PresentKmsWindows()
       // Playfield only: it is the surface whose swap blocks, and the only one worth restructuring.
       if ((wnd == m_outputWnd[0]) && g_pplayer && g_pplayer->m_ptable
          && g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout())
+      {
          presenter.ProbeOwnedScanout();
+         BindOwnedScanoutToBgfx(presenter.GetOwnedSlots());
+      }
       if (!presenter.IsReady())
       {
          const SDL_PropertiesID props = SDL_GetWindowProperties(core);

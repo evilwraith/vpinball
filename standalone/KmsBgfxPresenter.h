@@ -338,6 +338,8 @@ public:
    // Uses a live surface buffer as the template so the slots match what the display is already
    // accepting -- guessing the format or the modifier is the easiest way to get a pool that builds
    // and then fails at commit time.
+   const ScanoutSlots& GetOwnedSlots() const { return m_ownedSlots; }
+
    void ProbeOwnedScanout()
    {
       if (m_ownedScanoutProbed || !m_ready || m_prevBo == nullptr)
@@ -639,8 +641,8 @@ private:
    int m_drmFd = -1;
    uint32_t m_crtcId = 0;
    struct gbm_surface* m_surface = nullptr;
-   bool m_ownedScanoutProbed = false;
    ScanoutSlots m_ownedSlots; // held for the process lifetime; see ProbeOwnedScanout
+   bool m_ownedScanoutProbed = false;
    struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
    struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
    static constexpr int kMaxTrackedBos = 8;

@@ -66,6 +66,8 @@ public:
    RenderState m_renderState;
 };
 
+namespace VPX::Kms { class ScanoutSlots; }
+
 class RenderDevice final
 {
 public:
@@ -153,6 +155,9 @@ public:
    #ifdef __RK3588__
    void LogFrameStats(uint64_t submitUs, uint64_t presentUs); // periodic fps + frame phase split, Standalone/4kpGpuTimers
    static bool AreFrameStatsEnabled();
+   #ifdef __RK3588__
+   void BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots);
+   #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
    // Dynamic buffer traffic. Writing to a buffer the GPU may still be reading is what forces a
