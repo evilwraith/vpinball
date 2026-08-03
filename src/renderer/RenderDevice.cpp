@@ -2250,6 +2250,10 @@ void RenderDevice::ResetActiveView()
 #ifdef __RK3588__
 uint64_t RenderDevice::s_uploadUs = 0;
 uint64_t RenderDevice::s_bgfxFrameUs = 0;
+uint32_t RenderDevice::s_dynVbUpdates = 0;
+uint32_t RenderDevice::s_dynIbUpdates = 0;
+uint64_t RenderDevice::s_dynVbBytes = 0;
+uint64_t RenderDevice::s_dynIbBytes = 0;
 #endif
 
 void RenderDevice::SubmitAndFlipFrame(bool present)
@@ -2422,6 +2426,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    struct PassTime { double ms; uint32_t samples; uint32_t lastFrameNum; };
    static std::map<std::string, PassTime> s_passes;
    static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
+   static int32_t s_transientVb = 0, s_transientIb = 0;
+   static uint32_t s_dynVbCount = 0;
    static double s_renderCpuMs = 0.0, s_waitRenderMs = 0.0, s_waitSubmitMs = 0.0;
    static uint64_t s_uploadUsSum = 0, s_bgfxFrameUsSum = 0;
    s_uploadUsSum += s_uploadUs;
@@ -2439,6 +2445,9 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          s_waitRenderMs += toCpuMs * double(stats->waitRender);
          s_waitSubmitMs += toCpuMs * double(stats->waitSubmit);
       }
+      s_transientVb = max(s_transientVb, stats->transientVbUsed);
+      s_transientIb = max(s_transientIb, stats->transientIbUsed);
+      s_dynVbCount = max(s_dynVbCount, uint32_t(stats->numDynamicVertexBuffers));
       s_drawSum += stats->numDraw;
       s_viewSum += stats->numViews;
       for (uint8_t t = 0; t < BX_COUNTOF(stats->numPrims); ++t)
@@ -2476,6 +2485,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
       // bgfx thread, so bgfx::frame() runs the backend inline and neither side ever blocks on the
       // other. What is left of bgfx::frame() after issuing is the swap, which blocks on the GPU.
+      // A dynamic buffer written while the GPU may still be reading it forces a driver sync, which
+      // shows up as an idle GPU and a long frame rather than as cost in any pass.
+      PLOGI.printf("[4kpDebug][gpu_timers]   dynamic buffers: %.0f vb updates (%.0f KB) + %.0f ib updates (%.0f KB) per frame | %u dyn vb | transient peak %d/%d KB",
+         double(s_dynVbUpdates) / perFrame, double(s_dynVbBytes) / perFrame / 1024.0,
+         double(s_dynIbUpdates) / perFrame, double(s_dynIbBytes) / perFrame / 1024.0,
+         s_dynVbCount, s_transientVb / 1024, s_transientIb / 1024);
       PLOGI.printf("[4kpDebug][gpu_timers]   submit %.2f ms = uploads %.2f + bgfx::frame %.2f (of which %.2f issuing, %.2f swap)",
          submitMs, 0.001 * double(s_uploadUsSum) / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame,
          s_renderCpuMs / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame - s_renderCpuMs / perFrame);
@@ -2506,6 +2521,10 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_drawSum = s_primSum = s_viewSum = 0;
       s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
       s_uploadUsSum = s_bgfxFrameUsSum = 0;
+      s_dynVbUpdates = s_dynIbUpdates = 0;
+      s_dynVbBytes = s_dynIbBytes = 0;
+      s_transientVb = s_transientIb = 0;
+      s_dynVbCount = 0;
    }
 }
 #endif

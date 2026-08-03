@@ -155,6 +155,11 @@ public:
    static bool AreFrameStatsEnabled();
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
+   // Dynamic buffer traffic. Writing to a buffer the GPU may still be reading is what forces a
+   // driver side sync, so the count and the volume both matter -- see the TNA quad buffer stall on
+   // the 10.8.0 fork, which had the same signature of an idle GPU and a long frame.
+   static uint32_t s_dynVbUpdates, s_dynIbUpdates;
+   static uint64_t s_dynVbBytes, s_dynIbBytes;
    #endif // Standalone/4kpGpuTimers, also gates naming bgfx views for the per-pass report
    #endif
    #if defined(ENABLE_BGFX) && defined(__RK3588__)
