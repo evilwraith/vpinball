@@ -2495,10 +2495,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          double(s_dynVbUpdates) / perFrame, double(s_dynVbBytes) / perFrame / 1024.0,
          double(s_dynIbUpdates) / perFrame, double(s_dynIbBytes) / perFrame / 1024.0,
          s_dynVbCount, s_transientVb / 1024, s_transientIb / 1024);
-      // waitRender/waitSubmit are structurally zero: VPX makes the calling thread the only bgfx
-      // thread, so neither side ever waits on the other. Kept accumulating so that stops being true
-      // silently if the threading model changes.
-      (void)s_waitRenderMs; (void)s_waitSubmitMs;
+      // PHASE 1 DIAGNOSTIC (temporary): the bgfx probe puts the playfield GPU fence wait in
+      // waitRender and the residual eglSwapBuffers in waitSubmit. Fence long / swap short means
+      // genuinely GPU bound; fence short / swap long means the producer is waiting for a scanout
+      // slot, which is what 10.8.0's three-slot comment describes.
+      PLOGI.printf("[4kpDebug][gpu_timers]   playfield: gpu fence %.2f ms + residual swap %.2f ms  (PHASE1)",
+         s_waitRenderMs / perFrame, s_waitSubmitMs / perFrame);
       PLOGI.printf("[4kpDebug][gpu_timers]   submit %.2f ms = uploads %.2f + bgfx::frame %.2f (of which %.2f issuing, %.2f swap)",
          submitMs, 0.001 * double(s_uploadUsSum) / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame,
          s_renderCpuMs / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame - s_renderCpuMs / perFrame);
