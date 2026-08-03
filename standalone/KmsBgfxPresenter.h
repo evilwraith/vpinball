@@ -344,9 +344,23 @@ public:
       const uint32_t h = gbm_bo_get_height(m_prevBo);
       const uint32_t fmt = gbm_bo_get_format(m_prevBo);
 
+      // The first attempt segfaulted with no output at all, so the probe could not say which step
+      // it died on. Announce each step: the last line in the log then names the culprit.
+      PLOGI.printf("[4kpDebug][owned_scanout] probe start: %ux%u fourcc 0x%08x", w, h, fmt);
+
+      struct gbm_device* dev = gbm_bo_get_device(m_prevBo);
+      EGLDisplay dpy = eglGetCurrentDisplay();
+      PLOGI.printf("[4kpDebug][owned_scanout] gbm_device=%p egl_display=%p drm_fd=%d", (void*)dev, (void*)dpy, m_drmFd);
+
+      if (dev == nullptr || dpy == EGL_NO_DISPLAY)
+      {
+         PLOGE << "[4kpDebug][owned_scanout] probe aborted: no gbm device or no current EGL display on this thread";
+         return;
+      }
+
       ScanoutSlots slots;
       std::string err;
-      const bool ok = slots.Init(m_drmFd, gbm_bo_get_device(m_prevBo), eglGetCurrentDisplay(), w, h, fmt, err);
+      const bool ok = slots.Init(m_drmFd, dev, dpy, w, h, fmt, err);
 
       if (ok)
          PLOGI.printf("[4kpDebug][owned_scanout] probe OK: %d slots %ux%u fourcc 0x%08x -- imported to GL, framebuffer complete, registered with DRM",

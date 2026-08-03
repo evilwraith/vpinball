@@ -90,6 +90,7 @@ public:
       // extensions rather than by linking a second copy of the GL library into the process.
       if (!ResolveGl(error))
          return false;
+      PLOGI << "[4kpDebug][owned_scanout] step: GL entry points resolved";
 
       auto createImage = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
       auto destroyImage = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
@@ -100,12 +101,14 @@ public:
          return false;
       }
       m_destroyImage = destroyImage;
+      PLOGI << "[4kpDebug][owned_scanout] step: EGL image entry points resolved";
 
       for (int i = 0; i < kScanoutSlotCount; ++i)
       {
          Slot& slot = m_slots[i];
 
          // SCANOUT so VOP2 can read it, RENDERING so GL can draw into it.
+         PLOGI.printf("[4kpDebug][owned_scanout] step: slot %d gbm_bo_create", i);
          slot.bo = gbm_bo_create(gbmDevice, width, height, format, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
          if (slot.bo == nullptr)
          {
@@ -121,6 +124,7 @@ public:
          // usable only as an external texture: binding it to GL_TEXTURE_2D fails with
          // GL_INVALID_OPERATION, and an external texture cannot be a render target. current-gl
          // reached the same conclusion; this is its path.
+         PLOGI.printf("[4kpDebug][owned_scanout] step: slot %d eglCreateImageKHR (native pixmap, bo=%p stride=%u)", i, (void*)slot.bo, stride);
          slot.image = createImage(display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR,
             reinterpret_cast<EGLClientBuffer>(slot.bo), nullptr);
 
@@ -132,6 +136,7 @@ public:
             return false;
          }
 
+         PLOGI.printf("[4kpDebug][owned_scanout] step: slot %d import to GL texture", i);
          s_glGenTextures(1, &slot.texture);
          s_glBindTexture(GL_TEXTURE_2D, slot.texture);
          // Set before the import: the sampler state has to be complete for the imported image, and
@@ -154,6 +159,7 @@ public:
          // Importing is not enough -- the buffer has to work as a render target. A texture that
          // imports cleanly and then yields an incomplete framebuffer would fail later, at the point
          // where it is much harder to attribute.
+         PLOGI.printf("[4kpDebug][owned_scanout] step: slot %d framebuffer", i);
          s_glGenFramebuffers(1, &slot.fbo);
          s_glBindFramebuffer(GL_FRAMEBUFFER, slot.fbo);
          s_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot.texture, 0);
@@ -168,6 +174,7 @@ public:
          }
 
          // The scanout side. Same call the presenter makes for gbm_surface buffers.
+         PLOGI.printf("[4kpDebug][owned_scanout] step: slot %d drmModeAddFB2", i);
          const uint32_t handles[4] = { gbm_bo_get_handle(slot.bo).u32, 0, 0, 0 };
          const uint32_t strides[4] = { stride, 0, 0, 0 };
          const uint32_t offsets[4] = { 0, 0, 0, 0 };
