@@ -333,6 +333,10 @@ private:
    bgfx::TextureFormat::Enum SelectBackBufferFormat(const VPX::Window* wnd, bgfx::TextureFormat::Enum defaultFormat, bool isWCG) const;
    static colorFormat BGFXtoVPXTextureFormat(bgfx::TextureFormat::Enum format);
    static void RenderThread(RenderDevice* rd, bgfx::Init init);
+   static void BGFXRenderThread(RenderDevice* rd); // owns bgfx::renderFrame and KMS presentation
+   std::thread m_bgfxRenderThread;
+   std::binary_semaphore m_bgfxPreInitDone { 0 };
+   bool m_bgfxMultithreaded = false;
    void BGFXDesktopRenderLoop(const bgfx::Init& init);
 #ifdef ENABLE_XR
    void BGFXOpenXRRenderLoop(const bgfx::Init& init);

@@ -1426,6 +1426,11 @@ PropBool(Standalone, 4kpOwnedScanout, "Owned playfield scanout buffers"s,
 // Owned scanout buffers are written by GL bottom-up and the display reads them top-down, so the
 // plane has to reflect them. On by default: with it off every panel is upside down. Kept as a
 // switch because the orientation belongs to the driver rather than to VPX.
+// Run BGFX with its API and render threads split, which is its normal mode -- VPX forces
+// single-threaded by calling renderFrame() and init() on one thread. Splitting them lets frame
+// building overlap the blocking eglSwapBuffers instead of queueing behind it.
+PropBool(Standalone, 4kpBgfxMultithreaded, "BGFX multithreaded"s,
+   "Let BGFX use separate API and render threads so CPU frame building overlaps GPU work. RK3588 only."s, false);
 PropBool(Standalone, 4kpOwnedScanoutReflect, "Reflect owned scanout buffers"s,
    "Flip owned scanout buffers vertically at the display plane. Turn off only if the picture is upside down."s, true);
 PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,

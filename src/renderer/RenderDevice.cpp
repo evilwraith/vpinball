@@ -330,6 +330,35 @@ colorFormat RenderDevice::BGFXtoVPXTextureFormat(bgfx::TextureFormat::Enum forma
 
 static const string& bgfxRendererName(const bgfx::RendererType::Enum type);
 
+// bgfx's render thread. From bgfx.h: calling renderFrame() before init stops bgfx creating its own,
+// and "if both bgfx::renderFrame and bgfx::init are called from the same thread, bgfx operates in
+// single-threaded mode" -- which is what VPX has done until now, and why a blocking eglSwapBuffers
+// stalls the whole frame: there is no other thread to build the next one meanwhile.
+//
+// Splitting them gives bgfx's documented behaviour, where "the API thread and render thread run in
+// parallel, overlapping CPU frame building with GPU rendering", without patching bgfx.
+//
+// This thread owns the GL context, so KMS presentation belongs here: renderFrame() returns once the
+// frame has been rendered and swapped, which is exactly when the front buffer exists.
+void RenderDevice::BGFXRenderThread(RenderDevice* rd)
+{
+   SetThreadName("BGFXRender"s);
+
+   bgfx::renderFrame(); // before init, so bgfx does not spawn a render thread of its own
+   rd->m_bgfxPreInitDone.release();
+
+   while (rd->m_renderDeviceAlive)
+   {
+      const bgfx::RenderFrame::Enum r = bgfx::renderFrame(16);
+      if (r == bgfx::RenderFrame::Exiting)
+         break;
+      #ifdef __RK3588__
+      if (r == bgfx::RenderFrame::Render)
+         rd->PresentKmsWindows();
+      #endif
+   }
+}
+
 void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
 {
    SetThreadName("RenderThread"s);
@@ -445,7 +474,22 @@ void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
 
    init.resolution.reset &= ~BGFX_RESET_HDR10; // Handle HDR10 color space (actually BGFX select colorspace based on the backbuffer format and discard this flag)
    init.resolution.reset |= init.resolution.formatColor == bgfx::TextureFormat::RGB10A2 ? BGFX_RESET_HDR10 : 0;
-   bgfx::renderFrame();
+   // OpenXR is excluded deliberately: it needs all GPU submission on one thread between WaitFrame
+   // and EndFrame. This hardware has no VR, but the path still exists.
+   rd->m_bgfxMultithreaded = !g_pplayer->IsVR() && g_pplayer->m_ptable
+      && g_pplayer->m_ptable->m_settings.GetStandalone_4kpBgfxMultithreaded();
+
+   if (rd->m_bgfxMultithreaded)
+   {
+      rd->m_bgfxRenderThread = std::thread(&RenderDevice::BGFXRenderThread, rd);
+      rd->m_bgfxPreInitDone.acquire(); // renderFrame() must land before init, or bgfx makes its own
+      PLOGI << "BGFX running multithreaded: this thread is the API thread, presentation is on the render thread";
+   }
+   else
+   {
+      bgfx::renderFrame();
+   }
+
    if (!bgfx::init(init))
    {
       PLOGE << "BGFX initialization failed";
@@ -1923,6 +1967,8 @@ RenderDevice::~RenderDevice()
       g_pplayer->ProcessOSMessages(false);
       Sleep(0);
    }
+   if (m_bgfxRenderThread.joinable())
+      m_bgfxRenderThread.join(); // owns the GL context; must be gone before anything it used is freed
    if (m_renderThread.joinable())
       m_renderThread.join();
 
@@ -2771,7 +2817,10 @@ void RenderDevice::Flip()
    const uint64_t t0 = usec();
    SubmitAndFlipFrame(true);
    const uint64_t t1 = usec();
-   PresentKmsWindows();
+   // Multithreaded: the render thread presents, right after renderFrame() reports a frame. Calling
+   // it here too would present from a thread with no GL context and race the one that does.
+   if (!m_bgfxMultithreaded)
+      PresentKmsWindows();
    const uint64_t t2 = usec();
    LogFrameStats(t1 - t0, t2 - t1);
    #else
