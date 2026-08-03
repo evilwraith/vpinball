@@ -2310,7 +2310,7 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // Defined by our bgfx patch (vpx-patches/bgfx-skip-present.patch).
 extern "C" void bgfx_set_skip_present(bool skip);
 
-void RenderDevice::DisableOwnedScanout(const char* why)
+void RenderDevice::DisableOwnedScanout(const char* why)  // NOLINT
 {
    PLOGE << "[4kpDebug][owned_scanout] " << why << "; falling back to the EGL surface path";
    bgfx_set_skip_present(false);
@@ -2480,7 +2480,7 @@ void RenderDevice::PresentKmsWindows()
             wnd->SetBackBuffer(own.rt[own.slot], false);
             continue;
          }
-         DisableOwnedScanout("owned commit failed");
+         DisableOwnedScanout(("owned commit failed on window " + std::to_string(wndIdx)).c_str());
       }
       if (!presenter.IsReady())
       {

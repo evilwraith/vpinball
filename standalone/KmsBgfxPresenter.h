@@ -379,6 +379,7 @@ public:
    // BUFFER, which is not the mode whenever the buffer is deliberately smaller (BackBufferScale).
    bool CommitFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH, const bool reflectY = false)
    {
+      errno = 0;
       // Contract 1: mint the fence, and close it unconditionally below.
       const int fenceFd = CreateNativeFenceFd();
 
@@ -441,6 +442,12 @@ public:
 
       if (ret != 0)
       {
+         // First few only: if this is going to fail it fails every frame, and the errno is the
+         // whole diagnosis -- EINVAL is a rejected property or geometry, EBUSY a commit still in
+         // flight, EACCES a lost DRM master.
+         if (m_commitErrors < 3)
+            PLOGE.printf("[4kpDebug][owned_scanout] crtc=%u atomic commit failed: ret=%d errno=%d (%s) fb=%u src=%ux%u reflectY=%d addFailed=%d",
+               m_crtcId, ret, errno, strerror(errno), fbId, srcW, srcH, reflectY ? 1 : 0, addFailed);
          ++m_commitErrors;
          return false;
       }
