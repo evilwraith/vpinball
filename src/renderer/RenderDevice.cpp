@@ -2307,6 +2307,9 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // Verified rather than assumed: getInternal() must hand back the same GL id we supplied, since
 // overrideInternal returning silently without taking effect would otherwise look identical to
 // success right up until the display showed the wrong buffer.
+// Defined by our bgfx patch (vpx-patches/bgfx-skip-primary-swap.patch).
+extern "C" void bgfx_set_skip_primary_swap(bool skip);
+
 void RenderDevice::BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots)
 {
    if (m_ownedScanoutBindStep > 1 || !slots.IsReady())
@@ -2395,7 +2398,11 @@ void RenderDevice::BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots)
       m_ownedScanoutSlot = 0;
       m_outputWnd[0]->SetBackBuffer(m_ownedScanoutRT[0], false);
       m_ownedScanoutActive = true;
-      PLOGI << "[4kpDebug][owned_scanout] playfield output redirected; cycling 3 owned buffers";
+      // Nothing reads the EGL surface any more, and swapping it is what serialises the frame:
+      // eglSwapBuffers waits for the whole context's GPU work, so the CPU cannot start the next
+      // frame until this one's rendering has finished. We present through KMS with a fence instead.
+      bgfx_set_skip_primary_swap(true);
+      PLOGI << "[4kpDebug][owned_scanout] playfield output redirected; cycling 3 owned buffers, primary swap skipped";
    }
    else
    {
@@ -2443,6 +2450,7 @@ void RenderDevice::PresentKmsWindows()
          }
          PLOGE << "[4kpDebug][owned_scanout] owned commit failed; falling back to the EGL surface path";
          m_ownedScanoutActive = false;
+         bgfx_set_skip_primary_swap(false);
          m_outputWnd[0]->SetBackBuffer(m_originalBackBuffer, false);
       }
       if (!presenter.IsReady())

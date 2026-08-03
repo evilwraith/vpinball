@@ -1,0 +1,62 @@
+Let the embedder present the primary surface itself.
+
+eglSwapBuffers blocks until the whole context's GPU work has drained, not merely
+the work targeting the surface being swapped. When something else owns
+presentation -- here VPX renders into its own scanout buffers and commits them
+through KMS with an IN_FENCE_FD -- that call is pure cost: it presents a surface
+nobody reads, and it serialises the frame, because the CPU cannot begin frame
+N+1 until frame N's GPU work has finished. Measured on RK3588: 17 ms of a 25 ms
+frame, with the GPU idle for the remainder.
+
+This is the bgfx-side counterpart of SDL_KMSDRM_SKIP_EGL_SURFACE, which already
+stops SDL owning presentation for the same surface. Runtime rather than compile
+time so the first frames, before the embedder's buffers exist, and any fallback
+still present normally.
+
+Applies on top of bgfx-kmsdrm-gbm-egl.patch.
+
+--- a/src/glcontext_egl.cpp
++++ b/src/glcontext_egl.cpp
+@@ -779,13 +779,28 @@
+ 		bx::deleteObject(g_allocator, _swapChain);
+ 	}
+ 
++	// FORK PATCH (4kp): let the embedder present the primary surface itself.
++	//
++	// eglSwapBuffers blocks until the whole context's GPU work has drained, not merely the work
++	// targeting the surface being swapped. When something else owns presentation -- here, VPX renders
++	// into its own scanout buffers and commits them through KMS with an IN_FENCE_FD -- that call is
++	// pure cost: it presents a surface nobody reads, and it serialises the frame, because the CPU
++	// cannot begin frame N+1 until frame N's GPU work has finished.
++	//
++	// Measured on RK3588: 17 ms of a 25 ms frame, with the GPU idle for the remainder.
++	//
++	// This is the bgfx-side counterpart of SDL_KMSDRM_SKIP_EGL_SURFACE, which already stops SDL owning
++	// presentation for this surface. Runtime rather than compile time, so the first frames (before the
++	// embedder's buffers exist) and any fallback still present normally.
++	bool s_skipPrimarySwap = false;
++
+ 	void GlContext::swap(SwapChainGL* _swapChain)
+ 	{
+ 		makeCurrent(_swapChain);
+ 
+ 		if (NULL == _swapChain)
+ 		{
+-			if (NULL != m_display)
++			if (NULL != m_display && !s_skipPrimarySwap)
+ 			{
+ 				EGL_CHECK(eglSwapBuffers(m_display, m_surface) );
+ 			}
+@@ -880,5 +895,12 @@
+ 
+ } /* namespace gl */ } // namespace bgfx
+ 
++// FORK PATCH (4kp): see s_skipPrimarySwap above. C linkage so the embedder can flip it without
++// linking against bgfx internals.
++extern "C" void bgfx_set_skip_primary_swap(bool _skip)
++{
++	bgfx::gl::s_skipPrimarySwap = _skip;
++}
++
+ #	endif // BGFX_USE_EGL
+ #endif // (BGFX_CONFIG_RENDERER_OPENGLES || BGFX_CONFIG_RENDERER_OPENGL)

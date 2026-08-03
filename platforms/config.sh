@@ -22,7 +22,7 @@ FMT_SHA=11.1.4
 BGFX_CMAKE_VERSION=1.153.9385-561
 BGFX_PATCH_SHA=9bec2b3dd1cbb2082f88fc3881ccfa5a09250769
 # 4kp: KMSDRM/GBM EGL hunks ported from evilwraith/bgfx@03f25e9 (branch 4kp_fixes)
-BGFX_PATCHSET=kmsdrm-gbm-egl-gles-only-profiler-004
+BGFX_PATCHSET=kmsdrm-gbm-egl-gles-only-profiler-skipswap-005
 PINMAME_SHA=f53ff084f8313c8b3458aff4cc6375a3f6b2db72
 OPENXR_SHA=b15ef6ce120dad1c7d3ff57039e73ba1a9f17102
 LIBDMDUTIL_SHA=da00021340ed41875036d0622f0f22b09a11349d
