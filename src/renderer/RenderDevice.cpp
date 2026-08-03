@@ -2371,24 +2371,35 @@ void RenderDevice::BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots)
          !tookEffect ? "not built" : (bgfx::isValid(fb) ? "valid" : "INVALID"));
    }
 
-   // Redirect the playfield's output at slot 0. One slot for now, deliberately: this proves the
-   // whole chain -- render into our buffer, fence it, commit it, see it on screen -- without also
-   // introducing cycling. There is no pacing win yet, because a single slot still forces the
-   // producer to wait for the previous flip; that arrives with the other two.
-   if (bgfx::isValid(m_ownedScanoutFb[0]))
+   // A render target per slot, cycled. A single slot cannot work: with nothing to alternate with,
+   // the producer draws into the buffer the display is scanning out, which is visible as the frame
+   // being composed live on screen. Three is what current-gl settled on, and the reason it gives is
+   // the one that matters here -- render(N+1) needs somewhere to go while scanout(N) is still up.
+   bool allValid = true;
+   for (int i = 0; i < slots.Count(); ++i)
    {
-      m_ownedScanoutBackBuffer = new RenderTarget(this, SurfaceType::RT_DEFAULT, m_ownedScanoutFb[0],
-         m_ownedScanoutTex[0], bgfx::TextureFormat::BGRA8, BGFX_INVALID_HANDLE, bgfx::TextureFormat::D24S8,
-         "OwnedScanout0", m_outputWnd[0]->GetPixelWidth(), m_outputWnd[0]->GetPixelHeight(),
+      if (!bgfx::isValid(m_ownedScanoutFb[i]))
+      {
+         allValid = false;
+         break;
+      }
+      m_ownedScanoutRT[i] = new RenderTarget(this, SurfaceType::RT_DEFAULT, m_ownedScanoutFb[i],
+         m_ownedScanoutTex[i], bgfx::TextureFormat::BGRA8, BGFX_INVALID_HANDLE, bgfx::TextureFormat::D24S8,
+         "OwnedScanout" + std::to_string(i), m_outputWnd[0]->GetPixelWidth(), m_outputWnd[0]->GetPixelHeight(),
          BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
+   }
+
+   if (allValid)
+   {
       m_originalBackBuffer = m_outputWnd[0]->GetBackBuffer();
-      m_outputWnd[0]->SetBackBuffer(m_ownedScanoutBackBuffer, false);
+      m_ownedScanoutSlot = 0;
+      m_outputWnd[0]->SetBackBuffer(m_ownedScanoutRT[0], false);
       m_ownedScanoutActive = true;
-      PLOGI << "[4kpDebug][owned_scanout] playfield output redirected to slot 0; presenting our own framebuffer";
+      PLOGI << "[4kpDebug][owned_scanout] playfield output redirected; cycling 3 owned buffers";
    }
    else
    {
-      PLOGE << "[4kpDebug][owned_scanout] slot 0 framebuffer unusable; staying on the EGL surface path";
+      PLOGE << "[4kpDebug][owned_scanout] a slot framebuffer was unusable; staying on the EGL surface path";
    }
 }
 
@@ -2415,9 +2426,21 @@ void RenderDevice::PresentKmsWindows()
       // Any failure falls straight back to the surface path for this frame instead of dropping it.
       if (m_ownedScanoutActive && (wnd == m_outputWnd[0]))
       {
-         const VPX::Kms::ScanoutSlots::Slot& slot = presenter.GetOwnedSlots().GetSlot(0);
+         if (!m_ownedScanoutReflectLogged)
+         {
+            m_ownedScanoutReflectLogged = true;
+            PLOGI.printf("[4kpDebug][owned_scanout] plane vertical reflect: %s",
+               presenter.SupportsReflectY() ? "supported" : "NOT SUPPORTED -- image will be upside down");
+         }
+         const VPX::Kms::ScanoutSlots::Slot& slot = presenter.GetOwnedSlots().GetSlot(m_ownedScanoutSlot);
          if (presenter.PresentOwnedFb(slot.fbId, m_outputWnd[0]->GetPixelWidth(), m_outputWnd[0]->GetPixelHeight()))
+         {
+            // Move to the next buffer for the frame about to be built, so rendering never lands in
+            // the one just handed to the display.
+            m_ownedScanoutSlot = (m_ownedScanoutSlot + 1) % VPX::Kms::kScanoutSlotCount;
+            m_outputWnd[0]->SetBackBuffer(m_ownedScanoutRT[m_ownedScanoutSlot], false);
             continue;
+         }
          PLOGE << "[4kpDebug][owned_scanout] owned commit failed; falling back to the EGL surface path";
          m_ownedScanoutActive = false;
          m_outputWnd[0]->SetBackBuffer(m_originalBackBuffer, false);

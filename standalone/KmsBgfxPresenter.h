@@ -377,7 +377,7 @@ public:
    // The atomic commit itself, shared by the gbm_surface path and the owned-slot path so the four
    // hard contracts at the top of this file live in exactly one place. srcW/srcH describe the
    // BUFFER, which is not the mode whenever the buffer is deliberately smaller (BackBufferScale).
-   bool CommitFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH)
+   bool CommitFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH, const bool reflectY = false)
    {
       // Contract 1: mint the fence, and close it unconditionally below.
       const int fenceFd = CreateNativeFenceFd();
@@ -390,6 +390,10 @@ public:
          const uint32_t p = m_props.planeId;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.fbId, fbId) < 0;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcId, m_crtcId) < 0;
+         // GL writes our owned buffers bottom-up; the display reads them top-down. eglSwapBuffers
+         // reconciles that for the gbm_surface path, so only the owned path needs the reflect.
+         if (reflectY && m_props.rotation != 0 && SupportsReflectY())
+            addFailed |= drmModeAtomicAddProperty(req, p, m_props.rotation, kReflectY) < 0;
          if (fenceFd >= 0)
             addFailed |= drmModeAtomicAddProperty(req, p, m_props.inFenceFd, (uint64_t)fenceFd) < 0;
          // Contract 2: full geometry every commit. SRC_* are 16.16 fixed point.
@@ -453,8 +457,13 @@ public:
       if (!m_ready || fbId == 0)
          return false;
       DrainPendingFlip(); // Contract 3
-      return CommitFb(fbId, srcW, srcH);
+      return CommitFb(fbId, srcW, srcH, true);
    }
+
+   // Does this plane support the vertical reflect the owned path needs? Reported once so a build
+   // that silently renders upside down is distinguishable from one that cannot flip at all.
+   bool SupportsReflectY() const { return (m_props.rotationMask & kReflectY) != 0; }
+   static constexpr uint64_t kReflectY = 1ull << 5; // DRM_MODE_REFLECT_Y
 
    // Call on the thread that owns the GL/EGL context, immediately after BGFX has swapped, so the
    // front buffer exists and eglGetCurrentDisplay() is valid for minting the fence.
