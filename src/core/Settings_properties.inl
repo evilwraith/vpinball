@@ -1423,6 +1423,11 @@ PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, "
 // reports whether this driver accepts it, without changing how anything renders.
 PropBool(Standalone, 4kpOwnedScanout, "Owned playfield scanout buffers"s,
    "Render the playfield into VPX-owned scanout buffers instead of the EGL surface, so the CPU no longer blocks on GPU completion. RK3588 only."s, false);
+// Owned scanout buffers are written by GL bottom-up, but on this hardware they scan out correctly
+// without help -- asking the plane to reflect them inverted all three panels. Kept as a switch
+// rather than deleted, because the orientation is a property of the driver rather than of VPX.
+PropBool(Standalone, 4kpOwnedScanoutReflect, "Reflect owned scanout buffers"s,
+   "Ask the display plane to flip owned scanout buffers vertically. Only needed if the picture is upside down."s, false);
 PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,
    "Log frame rate and a GPU time breakdown per render pass every 5 seconds. RK3588 only."s, false);
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);

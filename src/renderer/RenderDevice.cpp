@@ -1845,6 +1845,13 @@ RenderDevice::RenderDevice(
 
 RenderDevice::~RenderDevice()
 {
+   #ifdef __RK3588__
+   // Before anything else is torn down, and while we still hold DRM master: plane rotation is
+   // CRTC state that outlives this process, so a reflected plane would leave the whole cabinet
+   // upside down until a reboot.
+   RestoreKmsPlaneState();
+   #endif
+
    #if defined(ENABLE_BGFX)
       // Suspend rendering before deleting anything that could be used
       m_renderDeviceAlive = false;
@@ -2435,9 +2442,19 @@ void RenderDevice::UpdateOwnedScanoutPresentSkip()
    PLOGI.printf("[4kpDebug][owned_scanout] all %zu windows owned; BGFX presentation skipped entirely", active);
 }
 
+static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
+
+// Undo anything we changed on the display hardware. Plane rotation is CRTC state that survives
+// the process, so leaving it set would leave every panel upside down until a reboot.
+void RenderDevice::RestoreKmsPlaneState()
+{
+   for (auto& [wnd, presenter] : s_presenters)
+      presenter.RestorePlaneRotation();
+}
+
 void RenderDevice::PresentKmsWindows()
 {
-   static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
+
 
    const bool ownedEnabled = g_pplayer && g_pplayer->m_ptable
       && g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout();
@@ -2472,7 +2489,8 @@ void RenderDevice::PresentKmsWindows()
       {
          OwnedScanout& own = m_ownedScanout[wndIdx];
          const VPX::Kms::ScanoutSlots::Slot& slot = presenter.GetOwnedSlots().GetSlot(own.slot);
-         if (presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight()))
+         if (presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight(),
+                g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanoutReflect()))
          {
             // Move to the next buffer for the frame about to be built, so rendering never lands in
             // the one just handed to the display.

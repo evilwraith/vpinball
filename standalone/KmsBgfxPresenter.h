@@ -398,7 +398,10 @@ public:
          // path fall back to the EGL surface every frame while the picture still looked right -- an
          // invisible fallback is worse than a visible failure.
          if (reflectY && m_props.rotation != 0 && SupportsReflectY())
+         {
             addFailed |= drmModeAtomicAddProperty(req, p, m_props.rotation, kRotate0 | kReflectY) < 0;
+            m_rotationTouched = true; // so it can be put back on the way out
+         }
          if (fenceFd >= 0)
             addFailed |= drmModeAtomicAddProperty(req, p, m_props.inFenceFd, (uint64_t)fenceFd) < 0;
          // Contract 2: full geometry every commit. SRC_* are 16.16 fixed point.
@@ -463,12 +466,35 @@ public:
    // Present a buffer we own rather than one the EGL surface handed us. No gbm_surface locking and
    // no buffer release: the slots are ours for the process lifetime, so the only contract that still
    // applies is one commit in flight per CRTC.
-   bool PresentOwnedFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH)
+   // Put the plane's rotation back the way we found it. MUST run before VPX exits: the property is
+   // CRTC state that outlives the process, so a plane left reflected leaves the whole cabinet
+   // upside down -- launcher, menus, everything -- until a reboot. Nothing else on the system sets
+   // rotation, so nothing else will put it right.
+   void RestorePlaneRotation()
+   {
+      if (!m_ready || m_props.rotation == 0 || !m_rotationTouched)
+         return;
+
+      drmModeAtomicReqPtr req = drmModeAtomicAlloc();
+      if (req == nullptr)
+         return;
+      if (drmModeAtomicAddProperty(req, m_props.planeId, m_props.rotation, kRotate0) >= 0)
+      {
+         // Blocking and without a page flip event: this is the last thing we do, and it has to land
+         // before the process goes away.
+         const int ret = drmModeAtomicCommit(m_drmFd, req, 0, nullptr);
+         PLOGI.printf("[4kpDebug][owned_scanout] crtc=%u plane rotation restored to ROTATE_0 (ret=%d)", m_crtcId, ret);
+      }
+      drmModeAtomicFree(req);
+      m_rotationTouched = false;
+   }
+
+   bool PresentOwnedFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH, const bool reflectY)
    {
       if (!m_ready || fbId == 0)
          return false;
       DrainPendingFlip(); // Contract 3
-      return CommitFb(fbId, srcW, srcH, true);
+      return CommitFb(fbId, srcW, srcH, reflectY);
    }
 
    // Does this plane support the vertical reflect the owned path needs? Reported once so a build
@@ -687,6 +713,7 @@ private:
    struct gbm_surface* m_surface = nullptr;
    ScanoutSlots m_ownedSlots; // held for the process lifetime; see ProbeOwnedScanout
    bool m_ownedScanoutProbed = false;
+   bool m_rotationTouched = false;
    struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
    struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
    static constexpr int kMaxTrackedBos = 8;

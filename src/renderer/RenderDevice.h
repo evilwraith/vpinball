@@ -175,6 +175,7 @@ public:
    void BindOwnedScanoutToBgfx(size_t idx, const VPX::Kms::ScanoutSlots& slots, VPX::Window* wnd);
    void DisableOwnedScanout(const char* why);
    void UpdateOwnedScanoutPresentSkip();
+   void RestoreKmsPlaneState(); // must run before exit; plane rotation outlives the process
    #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
