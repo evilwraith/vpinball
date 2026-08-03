@@ -90,6 +90,11 @@ public:
       // extensions rather than by linking a second copy of the GL library into the process.
       if (!ResolveGl(error))
          return false;
+
+      // BGFX caches its GL bindings and will not redundantly re-bind, so anything left bound
+      // differently from how it was found is state corruption from BGFX's point of view. Binding 0
+      // is not "putting it back", it is clobbering. Restore exactly what was there.
+      const GlBindings saved = SaveBindings();
       PLOGI << "[4kpDebug][owned_scanout] step: GL entry points resolved";
 
       auto createImage = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
@@ -114,6 +119,7 @@ public:
          {
             error = "gbm_bo_create failed for slot " + std::to_string(i);
             Destroy();
+            RestoreBindings(saved);
             return false;
          }
 
@@ -133,6 +139,7 @@ public:
             error = "eglCreateImageKHR failed for slot " + std::to_string(i) + " (egl error 0x"
                + std::to_string(eglGetError()) + ')';
             Destroy();
+            RestoreBindings(saved);
             return false;
          }
 
@@ -147,12 +154,12 @@ public:
          s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
          imageTargetTexture(GL_TEXTURE_2D, (GLeglImageOES)slot.image);
          const GLenum glErr = s_glGetError();
-         s_glBindTexture(GL_TEXTURE_2D, 0);
          if (glErr != GL_NO_ERROR)
          {
             error = "glEGLImageTargetTexture2DOES failed for slot " + std::to_string(i) + " (gl error 0x"
                + std::to_string(glErr) + ')';
             Destroy();
+            RestoreBindings(saved);
             return false;
          }
 
@@ -164,12 +171,12 @@ public:
          s_glBindFramebuffer(GL_FRAMEBUFFER, slot.fbo);
          s_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot.texture, 0);
          const GLenum fboStatus = s_glCheckFramebufferStatus(GL_FRAMEBUFFER);
-         s_glBindFramebuffer(GL_FRAMEBUFFER, 0);
          if (fboStatus != GL_FRAMEBUFFER_COMPLETE)
          {
             error = "framebuffer incomplete for slot " + std::to_string(i) + " (status 0x"
                + std::to_string(fboStatus) + ')';
             Destroy();
+            RestoreBindings(saved);
             return false;
          }
 
@@ -182,10 +189,12 @@ public:
          {
             error = "drmModeAddFB2 failed for slot " + std::to_string(i);
             Destroy();
+            RestoreBindings(saved);
             return false;
          }
       }
 
+      RestoreBindings(saved);
       m_ready = true;
       return true;
    }
@@ -212,6 +221,7 @@ public:
 
    void Destroy()
    {
+      const GlBindings saved = (s_glGetIntegerv != nullptr) ? SaveBindings() : GlBindings {};
       for (Slot& slot : m_slots)
       {
          if (slot.fbId != 0 && m_drmFd >= 0)
@@ -226,6 +236,8 @@ public:
             gbm_bo_destroy(slot.bo);
          slot = Slot {};
       }
+      if (s_glGetIntegerv != nullptr)
+         RestoreBindings(saved);
       m_ready = false;
    }
 
@@ -240,6 +252,23 @@ private:
    typedef void   (GL_APIENTRYP FramebufferTexture2DFn)(GLenum, GLenum, GLenum, GLuint, GLint);
    typedef GLenum (GL_APIENTRYP CheckFramebufferStatusFn)(GLenum);
    typedef void   (GL_APIENTRYP DeleteFramebuffersFn)(GLsizei, const GLuint*);
+   typedef void   (GL_APIENTRYP GetIntegervFn)(GLenum, GLint*);
+
+   struct GlBindings { GLint fbo = 0; GLint texture = 0; };
+
+   static GlBindings SaveBindings()
+   {
+      GlBindings b;
+      s_glGetIntegerv(GL_FRAMEBUFFER_BINDING, &b.fbo);
+      s_glGetIntegerv(GL_TEXTURE_BINDING_2D, &b.texture);
+      return b;
+   }
+
+   static void RestoreBindings(const GlBindings& b)
+   {
+      s_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)b.fbo);
+      s_glBindTexture(GL_TEXTURE_2D, (GLuint)b.texture);
+   }
 
    static inline GenTexturesFn s_glGenTextures = nullptr;
    static inline BindTextureFn s_glBindTexture = nullptr;
@@ -251,6 +280,7 @@ private:
    static inline FramebufferTexture2DFn s_glFramebufferTexture2D = nullptr;
    static inline CheckFramebufferStatusFn s_glCheckFramebufferStatus = nullptr;
    static inline DeleteFramebuffersFn s_glDeleteFramebuffers = nullptr;
+   static inline GetIntegervFn s_glGetIntegerv = nullptr;
 
    // eglGetProcAddress, not dlsym. libGLESv2.so.2 on this device is a ~5 KB stub that only pulls in
    // libmali.so.1 and exports none of GL itself; dlsym on its handle still resolves through the
@@ -273,12 +303,14 @@ private:
       s_glFramebufferTexture2D = (FramebufferTexture2DFn)eglGetProcAddress("glFramebufferTexture2D");
       s_glCheckFramebufferStatus = (CheckFramebufferStatusFn)eglGetProcAddress("glCheckFramebufferStatus");
       s_glDeleteFramebuffers = (DeleteFramebuffersFn)eglGetProcAddress("glDeleteFramebuffers");
+      s_glGetIntegerv = (GetIntegervFn)eglGetProcAddress("glGetIntegerv");
 
       if (s_glGenTextures == nullptr || s_glBindTexture == nullptr
        || s_glDeleteTextures == nullptr || s_glGetError == nullptr
        || s_glTexParameteri == nullptr || s_glGenFramebuffers == nullptr
        || s_glBindFramebuffer == nullptr || s_glFramebufferTexture2D == nullptr
-       || s_glCheckFramebufferStatus == nullptr || s_glDeleteFramebuffers == nullptr)
+       || s_glCheckFramebufferStatus == nullptr || s_glDeleteFramebuffers == nullptr
+       || s_glGetIntegerv == nullptr)
       {
          error = "eglGetProcAddress could not resolve the core GL entry points (needs "
                  "EGL_KHR_get_all_proc_addresses for non-extension functions)";
