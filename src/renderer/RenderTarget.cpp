@@ -750,13 +750,7 @@ void RenderTarget::Activate(const int layer)
    if (m_pendingClear)
    {
       m_pendingClear = false;
-      // TEMPORARY DIAGNOSTIC colour, not black. Ghosting that survives a clear cannot be stale
-      // buffer content, because the frame paints over it -- it would have to be something
-      // sampling the previous buffer and blending. Magenta answers that in one run: any magenta
-      // on screen is a region the frame does not write (so the clear works and staleness was
-      // possible), and ghosting over a correct picture with no magenta anywhere means the clear
-      // is working and the ghost comes from a blend.
-      bgfx::setViewClear(m_rd->m_activeViewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0xff00ffff, 1.0f, 0);
+      bgfx::setViewClear(m_rd->m_activeViewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
    }
    else
    #endif
