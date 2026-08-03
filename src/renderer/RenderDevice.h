@@ -157,6 +157,9 @@ public:
    static bool AreFrameStatsEnabled();
    #ifdef __RK3588__
    void BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots);
+   int m_ownedScanoutBindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done
+   bgfx::TextureHandle m_ownedScanoutTex[3] {};
+   bgfx::FrameBufferHandle m_ownedScanoutFb[3] {};
    #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats

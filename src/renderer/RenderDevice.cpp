@@ -2309,35 +2309,55 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // success right up until the display showed the wrong buffer.
 void RenderDevice::BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots)
 {
-   static bool s_bound = false;
-   if (s_bound || !slots.IsReady())
+   if (m_ownedScanoutBindStep > 1 || !slots.IsReady())
       return;
-   s_bound = true;
+
+   // Two frames, because bgfx defers texture creation to the next frame(). Calling overrideInternal
+   // in the same frame as createTexture2D returns 0, which its documentation spells out as "texture
+   // is not created yet from the main thread" -- the override is simply dropped, and a framebuffer
+   // built at that point wraps bgfx's own allocation rather than our scanout buffer. Nothing
+   // complains; the display just shows the wrong thing later.
+   if (m_ownedScanoutBindStep == 0)
+   {
+      for (int i = 0; i < slots.Count(); ++i)
+      {
+         // BGFX_TEXTURE_RT so bgfx treats it as attachable. Whatever bgfx allocates here is
+         // released by overrideInternal next frame.
+         m_ownedScanoutTex[i] = bgfx::createTexture2D(uint16_t(m_outputWnd[0]->GetPixelWidth()),
+            uint16_t(m_outputWnd[0]->GetPixelHeight()), false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+         if (!bgfx::isValid(m_ownedScanoutTex[i]))
+         {
+            PLOGE.printf("[4kpDebug][owned_scanout] slot %d: bgfx::createTexture2D failed", i);
+            m_ownedScanoutBindStep = 2;
+            return;
+         }
+      }
+      m_ownedScanoutBindStep = 1;
+      return;
+   }
+
+   m_ownedScanoutBindStep = 2;
 
    for (int i = 0; i < slots.Count(); ++i)
    {
       const VPX::Kms::ScanoutSlots::Slot& slot = slots.GetSlot(i);
 
-      // BGFX_TEXTURE_RT so bgfx treats it as attachable; the contents are replaced wholesale by
-      // overrideInternal, so the allocation bgfx makes here is transient.
-      bgfx::TextureHandle tex = bgfx::createTexture2D(uint16_t(m_outputWnd[0]->GetPixelWidth()),
-         uint16_t(m_outputWnd[0]->GetPixelHeight()), false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
-      if (!bgfx::isValid(tex))
-      {
-         PLOGE.printf("[4kpDebug][owned_scanout] slot %d: bgfx::createTexture2D failed", i);
-         return;
-      }
+      // The return value is the native pointer, so it is the confirmation that the swap took rather
+      // than being quietly dropped -- which looks exactly like success until the display is wrong.
+      const uintptr_t bound = bgfx::overrideInternal(m_ownedScanoutTex[i], uintptr_t(slot.texture));
+      const bool tookEffect = (bound == uintptr_t(slot.texture));
 
-      // overrideInternal hands back the native pointer for the texture, so its return value is the
-      // confirmation that the swap took rather than being silently ignored.
-      const uintptr_t bound = bgfx::overrideInternal(tex, uintptr_t(slot.texture));
+      // Only build the framebuffer once the texture really is ours; otherwise it would wrap the
+      // wrong storage and every later check would pass for the wrong reason.
+      bgfx::FrameBufferHandle fb = BGFX_INVALID_HANDLE;
+      if (tookEffect)
+         fb = bgfx::createFrameBuffer(1, &m_ownedScanoutTex[i], false);
+      m_ownedScanoutFb[i] = fb;
 
-      bgfx::FrameBufferHandle fb = bgfx::createFrameBuffer(1, &tex, false);
-
-      PLOGI.printf("[4kpDebug][owned_scanout] slot %d: gl texture %u -> bgfx texture %u (override returned %lu, %s), framebuffer %s",
-         i, slot.texture, tex.idx, (unsigned long)bound,
-         bound == uintptr_t(slot.texture) ? "MATCH" : "differs -- check before relying on it",
-         bgfx::isValid(fb) ? "valid" : "INVALID");
+      PLOGI.printf("[4kpDebug][owned_scanout] slot %d: gl texture %u -> bgfx texture %u, override returned %lu (%s), framebuffer %s",
+         i, slot.texture, m_ownedScanoutTex[i].idx, (unsigned long)bound,
+         tookEffect ? "MATCH" : "override did not take",
+         !tookEffect ? "not built" : (bgfx::isValid(fb) ? "valid" : "INVALID"));
    }
 }
 
