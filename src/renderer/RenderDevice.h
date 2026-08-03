@@ -158,7 +158,6 @@ public:
    // Dynamic buffer traffic. Writing to a buffer the GPU may still be reading is what forces a
    // driver side sync, so the count and the volume both matter -- see the TNA quad buffer stall on
    // the 10.8.0 fork, which had the same signature of an idle GPU and a long frame.
-   void RecycleKmsBuffers(); // release buffers whose flip has latched, before the next frame is submitted
    static uint32_t s_dynVbUpdates, s_dynIbUpdates;
    static uint64_t s_dynVbBytes, s_dynIbBytes;
    #endif // Standalone/4kpGpuTimers, also gates naming bgfx views for the per-pass report

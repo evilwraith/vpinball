@@ -324,35 +324,6 @@ public:
       return m_ready;
    }
 
-   // Hand back any buffer whose flip has already latched, without waiting for one that has not.
-   // Call before submitting the next frame: the producer needs somewhere to draw, and until this
-   // runs we are still holding a buffer the hardware finished with. Present() does the same thing,
-   // but only after BGFX has already swapped, which is too late to be of any use to that swap.
-   void RecycleCompletedFlip()
-   {
-      if (!m_ready)
-         return;
-
-      if (m_flipPending && m_drmFd >= 0)
-      {
-         pollfd pfd { m_drmFd, POLLIN, 0 }; // zero timeout: poll, never block
-         if (poll(&pfd, 1, 0) > 0)
-         {
-            drmEventContext ev {};
-            ev.version = 3;
-            ev.page_flip_handler2 = &WindowPresenter::FlipHandler;
-            drmHandleEvent(m_drmFd, &ev);
-            m_flipPending = false;
-         }
-      }
-
-      if (!m_flipPending && m_retiredBo)
-      {
-         gbm_surface_release_buffer(m_surface, m_retiredBo);
-         m_retiredBo = nullptr;
-      }
-   }
-
    // Call on the thread that owns the GL/EGL context, immediately after BGFX has swapped, so the
    // front buffer exists and eglGetCurrentDisplay() is valid for minting the fence.
    bool Present()

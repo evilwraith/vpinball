@@ -2296,18 +2296,9 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // scans the front buffer out (see standalone/KmsBgfxPresenter.h). Drive one presenter per output
 // window from the render thread, right after BGFX has swapped, so the front buffer exists and the
 // EGL context is current for minting the IN_FENCE_FD.
-static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
-
-// Give every presenter the chance to hand back a buffer whose flip has already latched, before the
-// producer goes looking for one to draw into.
-void RenderDevice::RecycleKmsBuffers()
-{
-   for (auto& [wnd, presenter] : s_presenters)
-      presenter.RecycleCompletedFlip();
-}
-
 void RenderDevice::PresentKmsWindows()
 {
+   static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
 
    for (VPX::Window* wnd : m_outputWnd)
    {
@@ -2437,7 +2428,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
    static int32_t s_transientVb = 0, s_transientIb = 0;
    static uint32_t s_dynVbCount = 0;
-   static double s_renderCpuMs = 0.0, s_waitRenderMs = 0.0, s_waitSubmitMs = 0.0;
+   static double s_renderCpuMs = 0.0, s_eglSwapMs = 0.0;
+   static uint32_t s_eglSwapCount = 0;
    static uint64_t s_uploadUsSum = 0, s_bgfxFrameUsSum = 0;
    s_uploadUsSum += s_uploadUs;
    s_bgfxFrameUsSum += s_bgfxFrameUs;
@@ -2451,8 +2443,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       {
          const double toCpuMs = 1000.0 / double(stats->cpuTimerFreq);
          s_renderCpuMs  += toCpuMs * double(stats->cpuTimeEnd - stats->cpuTimeBegin);
-         s_waitRenderMs += toCpuMs * double(stats->waitRender);
-         s_waitSubmitMs += toCpuMs * double(stats->waitSubmit);
+         s_eglSwapMs    += toCpuMs * double(stats->waitRender); // TEMP DIAG: eglSwapBuffers ns
+         s_eglSwapCount += uint32_t(stats->waitSubmit);         // TEMP DIAG: swap count
       }
       s_transientVb = max(s_transientVb, stats->transientVbUsed);
       s_transientIb = max(s_transientIb, stats->transientIbUsed);
@@ -2500,6 +2492,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          double(s_dynVbUpdates) / perFrame, double(s_dynVbBytes) / perFrame / 1024.0,
          double(s_dynIbUpdates) / perFrame, double(s_dynIbBytes) / perFrame / 1024.0,
          s_dynVbCount, s_transientVb / 1024, s_transientIb / 1024);
+      PLOGI.printf("[4kpDebug][gpu_timers]   eglSwapBuffers: %.2f ms/frame over %.1f swaps  (TEMP DIAG)",
+         s_eglSwapMs / perFrame, double(s_eglSwapCount) / perFrame);
       PLOGI.printf("[4kpDebug][gpu_timers]   submit %.2f ms = uploads %.2f + bgfx::frame %.2f (of which %.2f issuing, %.2f swap)",
          submitMs, 0.001 * double(s_uploadUsSum) / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame,
          s_renderCpuMs / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame - s_renderCpuMs / perFrame);
@@ -2528,7 +2522,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          pt.samples = 0; // keep lastFrameNum: the result it refers to has already been counted
       }
       s_drawSum = s_primSum = s_viewSum = 0;
-      s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
+      s_renderCpuMs = s_eglSwapMs = 0.0;
+      s_eglSwapCount = 0;
       s_uploadUsSum = s_bgfxFrameUsSum = 0;
       s_dynVbUpdates = s_dynIbUpdates = 0;
       s_dynVbBytes = s_dynIbBytes = 0;
@@ -2569,7 +2564,6 @@ void RenderDevice::Flip()
    // Schedule frame presentation (non blocking call, simply queueing the present command in the driver's render queue with a schedule for execution)
    #if defined(ENABLE_BGFX)
    #ifdef __RK3588__
-   RecycleKmsBuffers();
    const uint64_t t0 = usec();
    SubmitAndFlipFrame(true);
    const uint64_t t1 = usec();
