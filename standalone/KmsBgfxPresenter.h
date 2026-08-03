@@ -393,8 +393,12 @@ public:
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.crtcId, m_crtcId) < 0;
          // GL writes our owned buffers bottom-up; the display reads them top-down. eglSwapBuffers
          // reconciles that for the gbm_surface path, so only the owned path needs the reflect.
+         // ROTATE_0 as well as REFLECT_Y: the rotation property must always name a rotation angle,
+         // and a reflect bit on its own is rejected with EINVAL. That rejection is what made the owned
+         // path fall back to the EGL surface every frame while the picture still looked right -- an
+         // invisible fallback is worse than a visible failure.
          if (reflectY && m_props.rotation != 0 && SupportsReflectY())
-            addFailed |= drmModeAtomicAddProperty(req, p, m_props.rotation, kReflectY) < 0;
+            addFailed |= drmModeAtomicAddProperty(req, p, m_props.rotation, kRotate0 | kReflectY) < 0;
          if (fenceFd >= 0)
             addFailed |= drmModeAtomicAddProperty(req, p, m_props.inFenceFd, (uint64_t)fenceFd) < 0;
          // Contract 2: full geometry every commit. SRC_* are 16.16 fixed point.
@@ -469,7 +473,8 @@ public:
 
    // Does this plane support the vertical reflect the owned path needs? Reported once so a build
    // that silently renders upside down is distinguishable from one that cannot flip at all.
-   bool SupportsReflectY() const { return (m_props.rotationMask & kReflectY) != 0; }
+   bool SupportsReflectY() const { return (m_props.rotationMask & (kRotate0 | kReflectY)) == (kRotate0 | kReflectY); }
+   static constexpr uint64_t kRotate0 = 1ull << 0;  // DRM_MODE_ROTATE_0
    static constexpr uint64_t kReflectY = 1ull << 5; // DRM_MODE_REFLECT_Y
 
    // Call on the thread that owns the GL/EGL context, immediately after BGFX has swapped, so the
