@@ -2428,7 +2428,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
    static int32_t s_transientVb = 0, s_transientIb = 0;
    static uint32_t s_dynVbCount = 0;
-   static double s_renderCpuMs = 0.0, s_eglSwapMs = 0.0, s_eglSwapChainMs = 0.0;
+   static double s_renderCpuMs = 0.0, s_waitRenderMs = 0.0, s_waitSubmitMs = 0.0;
    static uint64_t s_uploadUsSum = 0, s_bgfxFrameUsSum = 0;
    s_uploadUsSum += s_uploadUs;
    s_bgfxFrameUsSum += s_bgfxFrameUs;
@@ -2442,8 +2442,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       {
          const double toCpuMs = 1000.0 / double(stats->cpuTimerFreq);
          s_renderCpuMs  += toCpuMs * double(stats->cpuTimeEnd - stats->cpuTimeBegin);
-         s_eglSwapMs      += toCpuMs * double(stats->waitRender); // TEMP DIAG: playfield surface
-         s_eglSwapChainMs += toCpuMs * double(stats->waitSubmit); // TEMP DIAG: other windows
+         s_waitRenderMs += toCpuMs * double(stats->waitRender);
+         s_waitSubmitMs += toCpuMs * double(stats->waitSubmit);
       }
       s_transientVb = max(s_transientVb, stats->transientVbUsed);
       s_transientIb = max(s_transientIb, stats->transientIbUsed);
@@ -2495,8 +2495,10 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          double(s_dynVbUpdates) / perFrame, double(s_dynVbBytes) / perFrame / 1024.0,
          double(s_dynIbUpdates) / perFrame, double(s_dynIbBytes) / perFrame / 1024.0,
          s_dynVbCount, s_transientVb / 1024, s_transientIb / 1024);
-      PLOGI.printf("[4kpDebug][gpu_timers]   eglSwapBuffers: playfield %.2f ms + other windows %.2f ms  (TEMP DIAG)",
-         s_eglSwapMs / perFrame, s_eglSwapChainMs / perFrame);
+      // waitRender/waitSubmit are structurally zero: VPX makes the calling thread the only bgfx
+      // thread, so neither side ever waits on the other. Kept accumulating so that stops being true
+      // silently if the threading model changes.
+      (void)s_waitRenderMs; (void)s_waitSubmitMs;
       PLOGI.printf("[4kpDebug][gpu_timers]   submit %.2f ms = uploads %.2f + bgfx::frame %.2f (of which %.2f issuing, %.2f swap)",
          submitMs, 0.001 * double(s_uploadUsSum) / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame,
          s_renderCpuMs / perFrame, 0.001 * double(s_bgfxFrameUsSum) / perFrame - s_renderCpuMs / perFrame);
@@ -2525,7 +2527,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          pt.samples = 0; // keep lastFrameNum: the result it refers to has already been counted
       }
       s_drawSum = s_primSum = s_viewSum = 0;
-      s_renderCpuMs = s_eglSwapMs = s_eglSwapChainMs = 0.0;
+      s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
       s_uploadUsSum = s_bgfxFrameUsSum = 0;
       s_dynVbUpdates = s_dynIbUpdates = 0;
       s_dynVbBytes = s_dynIbBytes = 0;
