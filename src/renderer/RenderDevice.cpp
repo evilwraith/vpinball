@@ -2480,8 +2480,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       // The GPU is busy for only part of the frame, so what bgfx::frame() spends beyond that is the
       // CPU issuing commands. These are the counts that cost drives.
       const double perFrame = double(s_frames ? s_frames : 1);
-      PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives",
-         double(s_drawSum) / perFrame, double(s_primSum) / perFrame);
+      // Whether static parts are being composited from the prepass or re-rendered every frame. The
+      // latter re-bins the whole table's static geometry per frame, which is invisible to any
+      // fragment side measurement and is the shape of wall this table is hitting.
+      const bool usingPrepass = g_pplayer && g_pplayer->m_renderer && g_pplayer->m_renderer->IsUsingStaticPrepass();
+      PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives | static prepass %s",
+         double(s_drawSum) / perFrame, double(s_primSum) / perFrame, usingPrepass ? "IN USE" : "DISABLED (statics re-rendered every frame)");
       // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
       // bgfx thread, so bgfx::frame() runs the backend inline and neither side ever blocks on the
       // other. What is left of bgfx::frame() after issuing is the swap, which blocks on the GPU.
