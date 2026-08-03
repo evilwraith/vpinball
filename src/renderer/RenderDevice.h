@@ -156,15 +156,24 @@ public:
    void LogFrameStats(uint64_t submitUs, uint64_t presentUs); // periodic fps + frame phase split, Standalone/4kpGpuTimers
    static bool AreFrameStatsEnabled();
    #ifdef __RK3588__
-   void BindOwnedScanoutToBgfx(const VPX::Kms::ScanoutSlots& slots);
-   int m_ownedScanoutBindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done
-   bool m_ownedScanoutActive = false;
+   // Owned scanout, one set per output window. Every window needs it or none benefits: an
+   // eglSwapBuffers on any surface drains the whole context, so leaving one window on the EGL path
+   // re-serialises the frame for all of them.
+   struct OwnedScanout
+   {
+      bgfx::TextureHandle tex[3] {};
+      bgfx::FrameBufferHandle fb[3] {};
+      class RenderTarget* rt[3] {};
+      class RenderTarget* originalBackBuffer = nullptr; // kept so the fallback can restore it
+      int slot = 0;
+      int bindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done
+      bool active = false;
+   };
+   vector<OwnedScanout> m_ownedScanout; // parallel to m_outputWnd
+   bool m_ownedScanoutPresentSkipped = false;
    bool m_ownedScanoutReflectLogged = false;
-   int m_ownedScanoutSlot = 0;
-   class RenderTarget* m_ownedScanoutRT[3] {};
-   class RenderTarget* m_originalBackBuffer = nullptr; // kept so the fallback can restore it
-   bgfx::TextureHandle m_ownedScanoutTex[3] {};
-   bgfx::FrameBufferHandle m_ownedScanoutFb[3] {};
+   void BindOwnedScanoutToBgfx(size_t idx, const VPX::Kms::ScanoutSlots& slots, VPX::Window* wnd);
+   void DisableOwnedScanout(const char* why);
    #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
