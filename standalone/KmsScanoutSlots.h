@@ -61,7 +61,12 @@ public:
       bool inFlight = false; // committed, not yet confirmed latched
    };
 
-   ~ScanoutSlots() { Destroy(); }
+   // Deliberately does NOT destroy. Tearing the pool down segfaulted inside libmali --
+   // pthread_mutex_lock on the render thread, from a driver object that outlives what we freed --
+   // so the buffers are held for the process lifetime. current-gl does the same: it builds its three
+   // slots once and never releases them. Destroy() is kept for the failure path inside Init, where
+   // nothing has been handed to the driver yet, and it must not be called once the pool is live.
+   ~ScanoutSlots() = default;
 
    ScanoutSlots() = default;
    ScanoutSlots(const ScanoutSlots&) = delete;

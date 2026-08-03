@@ -326,10 +326,14 @@ public:
       return m_ready;
    }
 
-   // Frame pacing phase 2, step 1: prove the pool can actually be built on this driver before any
-   // of the render path is restructured around it. Runs once, allocates the three slots, imports
-   // each into GL and registers a DRM framebuffer, reports, then tears the pool back down. Nothing
-   // renders into it yet.
+   // Frame pacing phase 2, step 1: build the pool the render path will use. Runs once, allocates
+   // the three slots, imports each into GL and registers a DRM framebuffer, and keeps them. Nothing
+   // renders into them yet.
+   //
+   // The pool is held for the process lifetime rather than probed and released: releasing it
+   // segfaulted inside libmali (pthread_mutex_lock on the render thread, from a driver object still
+   // referencing what we had freed). current-gl keeps its slots for the same reason, and the real
+   // implementation needs them to persist anyway.
    //
    // Uses a live surface buffer as the template so the slots match what the display is already
    // accepting -- guessing the format or the modifier is the easiest way to get a pool that builds
@@ -358,17 +362,14 @@ public:
          return;
       }
 
-      ScanoutSlots slots;
       std::string err;
-      const bool ok = slots.Init(m_drmFd, dev, dpy, w, h, fmt, err);
+      const bool ok = m_ownedSlots.Init(m_drmFd, dev, dpy, w, h, fmt, err);
 
       if (ok)
-         PLOGI.printf("[4kpDebug][owned_scanout] probe OK: %d slots %ux%u fourcc 0x%08x -- imported to GL, framebuffer complete, registered with DRM",
-            slots.Count(), w, h, fmt);
+         PLOGI.printf("[4kpDebug][owned_scanout] pool ready: %d slots %ux%u fourcc 0x%08x -- imported to GL, framebuffer complete, registered with DRM",
+            m_ownedSlots.Count(), w, h, fmt);
       else
-         PLOGE.printf("[4kpDebug][owned_scanout] probe FAILED: %s (%ux%u fourcc 0x%08x)", err.c_str(), w, h, fmt);
-
-      slots.Destroy();
+         PLOGE.printf("[4kpDebug][owned_scanout] pool FAILED: %s (%ux%u fourcc 0x%08x)", err.c_str(), w, h, fmt);
    }
 
    // Call on the thread that owns the GL/EGL context, immediately after BGFX has swapped, so the
@@ -639,6 +640,7 @@ private:
    uint32_t m_crtcId = 0;
    struct gbm_surface* m_surface = nullptr;
    bool m_ownedScanoutProbed = false;
+   ScanoutSlots m_ownedSlots; // held for the process lifetime; see ProbeOwnedScanout
    struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
    struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
    static constexpr int kMaxTrackedBos = 8;
