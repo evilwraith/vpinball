@@ -62,8 +62,8 @@ public:
    // Inputs
    bool GetSwitch(int nSwitchNo) const;
    void SetSwitch(int nSwitchNo, bool state);
-   int GetDip(int nNo) const;
-   void SetDip(int nNo, int state);
+   int GetDip(int nDipBank) const;
+   void SetDip(int nDipBank, int byteState);
 
    // Devices
    long GetSolMask(int nLow) const;
@@ -167,6 +167,7 @@ private:
    string m_szRomName; // Resolved driver name
    mutable std::unordered_map<string, GameSettings*> m_gameSettings; // shared per game so settings survive repeated Games(name) accesses
    Settings* m_settings = nullptr;
+   PinmameConfig m_pinmameConfig;
    PinmameMechConfig* m_pPinmameMechConfig = nullptr;
    vector<PinmameLEDState> m_ledStates;
    vector<PinmameNVRAMState> m_nvramStates;
