@@ -333,6 +333,13 @@ void GraphicSettingsPage::BuildPage()
          m_notificationId = m_player->m_liveUI->PushNotification("This change will be applied after restarting the player."s, 3000, m_notificationId);
       }));
 
+   // Unlike the reflection quality below, this one takes effect immediately: the probe is resolved
+   // per draw, so there is nothing cached to invalidate and no restart notification to show.
+   AddItem(std::make_unique<InGameUIItem>( //
+      Settings::m_propPlayer_Refraction, //
+      [this]() { return m_player->m_ptable->m_settings.GetPlayer_Refraction(); }, //
+      [this](bool v) { m_player->m_ptable->m_settings.SetPlayer_Refraction(v, false); }));
+
    // TODO this property is directly persisted. It does not follow the overall UI design: App/Table/Live state => Implement live state (will also enable table override)
    AddItem(std::make_unique<InGameUIItem>(
       Settings::m_propPlayer_PFReflection, //
@@ -425,6 +432,11 @@ void GraphicSettingsPage::BuildPage()
       Settings::m_propPlayer_BallAntiStretch, //
       [this]() { return m_player->m_renderer->m_ballAntiStretch; }, //
       [this](bool v) { m_player->m_renderer->m_ballAntiStretch = v; }));
+   // Read live at uniform-upload time, so this applies on the next frame.
+   AddItem(std::make_unique<InGameUIItem>( //
+      Settings::m_propPlayer_RaytracedBallShadows, //
+      [this]() { return m_player->m_ptable->m_settings.GetPlayer_RaytracedBallShadows(); }, //
+      [this](bool v) { m_player->m_ptable->m_settings.SetPlayer_RaytracedBallShadows(v, false); }));
 
    AddItem(std::make_unique<InGameUIItem>( //
       Settings::m_propPlayer_DisableLightingForBalls, //

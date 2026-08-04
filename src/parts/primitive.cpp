@@ -1120,7 +1120,11 @@ void Primitive::Render(const unsigned int renderMask)
    m_renderer->m_renderDevice->ResetRenderState();
 
    // Request probes before setting up state since this can trigger a renderprobe update which modifies the render state
-   RenderProbe *const refraction_probe = m_ptable->GetRenderProbe(m_d.m_szRefractionProbe);
+   // Resolving no probe is what disables refraction -- the same thing a table script achieves by
+   // assigning an empty RefractionProbe name, so this needs no special handling further down. Read
+   // live so the setting applies immediately rather than on restart.
+   RenderProbe *const refraction_probe = m_ptable->m_settings.GetPlayer_Refraction()
+      ? m_ptable->GetRenderProbe(m_d.m_szRefractionProbe) : nullptr;
    RenderTarget *const refractions = refraction_probe ? refraction_probe->Render(renderMask) : nullptr;
 
    const Material *const mat = m_ptable->GetMaterial(m_d.m_szMaterial);

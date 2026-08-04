@@ -222,16 +222,6 @@ PropBool(Player, DisableLightingForBalls, "Disable Ball Lighting"s, "Disable lig
 // in ball_shadows.sh. On a tile GPU that is a large share of the light and basic passes. Turning this
 // off costs one comparison per fragment: the shader already early-outs on the first ball with radius
 // zero, so the renderer simply stops filling the array.
-// Baked lightmap overlays (VLM and similar) are additive quads whose alpha tracks their driving
-// light's intensity. A table can stack dozens of them, and the ones that are nearly off still cost a
-// full additive pass over their area. This raises the existing "nothing to add" early-out from
-// exactly zero to a threshold, so barely-contributing overlays are skipped.
-//
-// Deterministic by construction: alpha follows the light's smooth intensity, so the same overlays
-// drop on consecutive frames rather than flickering. 0 keeps the original behaviour exactly.
-PropFloat(Player, LightmapMinIntensity, "Lightmap Cutoff"s,
-   "Skip additive lightmap overlays contributing less than this.\nRaises the threshold below which a baked lightmap is considered to add nothing. 0 draws them all."s,
-   0.f, 0.25f, 0.f);
 PropBool(Player, RaytracedBallShadows, "Raytraced Ball Shadows"s,
    "Cast per-pixel raytraced ball shadows from bulb lights.\nDisabling keeps the lighting but drops the shadows, which is a significant saving on lower-end GPUs."s, true);
 PropBool(Player, BallTrail, "Ball Trail"s, "Legacy Ball Trails.\nWill/should be replaced by ForceMotionBlurOff with the next release"s, false);

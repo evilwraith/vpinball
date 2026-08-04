@@ -1945,16 +1945,22 @@ void Renderer::RenderDynamics()
    m_renderDevice->m_ballShader->SetMatrix(SHADER_matProj, &matProj[0], nEyes);
 
    // Update ball pos uniforms
+   //
+   // Leaving the array empty is how ball shadows are disabled: ball_shadows.sh early-outs on the
+   // first entry with radius 0, and every unused slot is already padded with one below. So the cost
+   // of "off" is a single compare per lit fragment, with no shader variant to build or select.
+   // Read live rather than cached so the setting can be toggled without restarting.
    vec4 balls[MAX_BALL_SHADOW];
    int p = 0;
-   for (size_t i = 0; i < g_pplayer->m_vball.size() && p < MAX_BALL_SHADOW; i++)
-   {
-      Ball* const pball = g_pplayer->m_vball[i];
-      if (!pball->m_d.m_visible)
-         continue;
-      balls[p] = vec4(pball->GetPosition(), pball->GetRadius());
-      p++;
-   }
+   if (m_table->m_settings.GetPlayer_RaytracedBallShadows())
+      for (size_t i = 0; i < g_pplayer->m_vball.size() && p < MAX_BALL_SHADOW; i++)
+      {
+         Ball* const pball = g_pplayer->m_vball[i];
+         if (!pball->m_d.m_visible)
+            continue;
+         balls[p] = vec4(pball->GetPosition(), pball->GetRadius());
+         p++;
+      }
    for (; p < MAX_BALL_SHADOW; p++)
       balls[p] = vec4(-1000.f, -1000.f, -1000.f, 0.0f);
    m_renderDevice->m_lightShader->SetFloat4v(SHADER_balls, balls, MAX_BALL_SHADOW);
