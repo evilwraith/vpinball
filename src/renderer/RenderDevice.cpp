@@ -2552,6 +2552,15 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       // latter re-bins the whole table's static geometry per frame, which is invisible to any
       // fragment side measurement and is the shape of wall this table is hitting.
       const bool usingPrepass = g_pplayer && g_pplayer->m_renderer && g_pplayer->m_renderer->IsUsingStaticPrepass();
+      // Where the frame's non-submit time goes. "other" is dominated by the render loop waiting for
+      // the logic thread, and that wait is the thing interleaving would remove: VPX builds into a
+      // single render frame, so the logic thread cannot start N+1 until the render thread has
+      // consumed N. VPX already measures both, so use its numbers rather than inferring from "other".
+      if (g_pplayer->m_renderProfiler != nullptr)
+         PLOGI.printf("[4kpDebug][gpu_timers]   render loop: %.2f ms waiting on the logic thread, %.2f ms submitting | logic thread frame %.2f ms",
+            0.001 * g_pplayer->m_renderProfiler->GetSlidingAvg(FrameProfiler::PROFILE_RENDER_WAIT),
+            0.001 * g_pplayer->m_renderProfiler->GetSlidingAvg(FrameProfiler::PROFILE_RENDER_SUBMIT),
+            0.001 * g_pplayer->m_logicProfiler.GetSlidingAvg(FrameProfiler::PROFILE_FRAME));
       PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives | static prepass %s",
          double(s_drawSum) / perFrame, double(s_primSum) / perFrame, usingPrepass ? "IN USE" : "DISABLED (statics re-rendered every frame)");
       // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
