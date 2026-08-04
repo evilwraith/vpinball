@@ -694,6 +694,9 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
    // Desktop renderloop, synchronized on main display (playfield window), with game logic preparing frames as soon as possible
    while (m_renderDeviceAlive)
    {
+      #ifdef __RK3588__
+      m_loopTopUs = usec();
+      #endif
       g_pplayer->m_renderProfiler->NewFrame(g_pplayer->m_time_msec);
 
       // wait for a frame to be prepared by the logic thread
@@ -2302,6 +2305,7 @@ void RenderDevice::ResetActiveView()
 }
 
 #ifdef __RK3588__
+uint64_t RenderDevice::s_preSubmitUs = 0;
 uint64_t RenderDevice::s_uploadUs = 0;
 uint64_t RenderDevice::s_bgfxFrameUs = 0;
 uint32_t RenderDevice::s_dynVbUpdates = 0;
@@ -2314,6 +2318,7 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 {
    #ifdef __RK3588__
    const uint64_t tSubmitBegin = usec();
+   s_preSubmitUs = (m_loopTopUs != 0 && tSubmitBegin > m_loopTopUs) ? tSubmitBegin - m_loopTopUs : 0;
    #endif
    // Process pending texture upload/mipmap generation before flipping the frame
    for (auto it = m_pendingTextureUploads.cbegin(); it != m_pendingTextureUploads.cend();)
@@ -2497,7 +2502,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    static int32_t s_transientVb = 0, s_transientIb = 0;
    static uint32_t s_dynVbCount = 0;
    static double s_renderCpuMs = 0.0, s_waitRenderMs = 0.0, s_waitSubmitMs = 0.0;
-   static uint64_t s_uploadUsSum = 0, s_bgfxFrameUsSum = 0;
+   static uint64_t s_uploadUsSum = 0, s_bgfxFrameUsSum = 0, s_preSubmitUsSum = 0;
+   s_preSubmitUsSum += s_preSubmitUs;
    s_uploadUsSum += s_uploadUs;
    s_bgfxFrameUsSum += s_bgfxFrameUs;
    if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr && stats->gpuTimerFreq > 0)
@@ -2552,15 +2558,19 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       // latter re-bins the whole table's static geometry per frame, which is invisible to any
       // fragment side measurement and is the shape of wall this table is hitting.
       const bool usingPrepass = g_pplayer && g_pplayer->m_renderer && g_pplayer->m_renderer->IsUsingStaticPrepass();
-      // Where the frame's non-submit time goes. "other" is dominated by the render loop waiting for
-      // the logic thread, and that wait is the thing interleaving would remove: VPX builds into a
-      // single render frame, so the logic thread cannot start N+1 until the render thread has
-      // consumed N. VPX already measures both, so use its numbers rather than inferring from "other".
+      // Where the frame's non-submit time goes. The logic-thread wait measures zero -- the logic
+      // thread always has a frame ready, so it never holds the render loop up and double buffering
+      // the render frame would remove nothing. What is left is the loop's own overhead, split at the
+      // moment the frame is handed to BGFX.
       if (g_pplayer->m_renderProfiler != nullptr)
          PLOGI.printf("[4kpDebug][gpu_timers]   render loop: %.2f ms waiting on the logic thread, %.2f ms submitting | logic thread frame %.2f ms",
             0.001 * g_pplayer->m_renderProfiler->GetSlidingAvg(FrameProfiler::PROFILE_RENDER_WAIT),
             0.001 * g_pplayer->m_renderProfiler->GetSlidingAvg(FrameProfiler::PROFILE_RENDER_SUBMIT),
             0.001 * g_pplayer->m_logicProfiler.GetSlidingAvg(FrameProfiler::PROFILE_FRAME));
+      const double otherMs = frameMs - submitMs - presentMs;
+      const double preSubmitMs = 0.001 * double(s_preSubmitUsSum) / perFrame;
+      PLOGI.printf("[4kpDebug][gpu_timers]   other %.2f ms = %.2f before submit + %.2f after flip",
+         otherMs, preSubmitMs, otherMs - preSubmitMs);
       PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives | static prepass %s",
          double(s_drawSum) / perFrame, double(s_primSum) / perFrame, usingPrepass ? "IN USE" : "DISABLED (statics re-rendered every frame)");
       // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
@@ -2607,7 +2617,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       }
       s_drawSum = s_primSum = s_viewSum = 0;
       s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
-      s_uploadUsSum = s_bgfxFrameUsSum = 0;
+      s_uploadUsSum = s_bgfxFrameUsSum = s_preSubmitUsSum = 0;
       s_dynVbUpdates = s_dynIbUpdates = 0;
       s_dynVbBytes = s_dynIbBytes = 0;
       s_transientVb = s_transientIb = 0;
