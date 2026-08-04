@@ -1416,23 +1416,15 @@ PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, g_isStandalone);
 
 // Standalone
 PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, ""s, int, -1, -1, "Default"s, "2D"s, "Stereo 3D"s, "VR"s);
+// Run BGFX with its API and render threads split, which is its normal mode. VPX forces
+// single-threaded by calling renderFrame() and init() from one thread, and on this hardware that
+// serialises the frame: eglSwapBuffers blocks until the GPU has drained, and with one thread there
+// is nothing to build the next frame meanwhile. Measured on TAF: 39 -> 44 fps.
+PropBool(Standalone, 4kpBgfxMultithreaded, "BGFX multithreaded"s,
+   "Let BGFX use separate API and render threads so CPU frame building overlaps GPU work. RK3588 only."s, true);
 // Periodic frame breakdown to the log: fps, where the CPU frame goes (submit vs present), and GPU
 // time both whole-frame and per pass. Same setting name as the 10.8.0 fork so a like-for-like
 // comparison needs no config difference.
-// Frame pacing phase 2. Currently probe-only: builds the owned scanout pool once at startup and
-// reports whether this driver accepts it, without changing how anything renders.
-PropBool(Standalone, 4kpOwnedScanout, "Owned playfield scanout buffers"s,
-   "Render the playfield into VPX-owned scanout buffers instead of the EGL surface, so the CPU no longer blocks on GPU completion. RK3588 only."s, false);
-// Owned scanout buffers are written by GL bottom-up and the display reads them top-down, so the
-// plane has to reflect them. On by default: with it off every panel is upside down. Kept as a
-// switch because the orientation belongs to the driver rather than to VPX.
-// Run BGFX with its API and render threads split, which is its normal mode -- VPX forces
-// single-threaded by calling renderFrame() and init() on one thread. Splitting them lets frame
-// building overlap the blocking eglSwapBuffers instead of queueing behind it.
-PropBool(Standalone, 4kpBgfxMultithreaded, "BGFX multithreaded"s,
-   "Let BGFX use separate API and render threads so CPU frame building overlaps GPU work. RK3588 only."s, false);
-PropBool(Standalone, 4kpOwnedScanoutReflect, "Reflect owned scanout buffers"s,
-   "Flip owned scanout buffers vertically at the display plane. Turn off only if the picture is upside down."s, true);
 PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,
    "Log frame rate and a GPU time breakdown per render pass every 5 seconds. RK3588 only."s, false);
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);

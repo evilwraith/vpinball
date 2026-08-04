@@ -42,8 +42,6 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
-#include "KmsScanoutSlots.h"
-
 namespace VPX::Kms
 {
 
@@ -338,46 +336,10 @@ public:
    // Uses a live surface buffer as the template so the slots match what the display is already
    // accepting -- guessing the format or the modifier is the easiest way to get a pool that builds
    // and then fails at commit time.
-   const ScanoutSlots& GetOwnedSlots() const { return m_ownedSlots; }
-
-   void ProbeOwnedScanout()
-   {
-      if (m_ownedScanoutProbed || !m_ready || m_prevBo == nullptr)
-         return;
-      m_ownedScanoutProbed = true;
-
-      const uint32_t w = gbm_bo_get_width(m_prevBo);
-      const uint32_t h = gbm_bo_get_height(m_prevBo);
-      const uint32_t fmt = gbm_bo_get_format(m_prevBo);
-
-      // The first attempt segfaulted with no output at all, so the probe could not say which step
-      // it died on. Announce each step: the last line in the log then names the culprit.
-      PLOGI.printf("[4kpDebug][owned_scanout] probe start: %ux%u fourcc 0x%08x", w, h, fmt);
-
-      struct gbm_device* dev = gbm_bo_get_device(m_prevBo);
-      EGLDisplay dpy = eglGetCurrentDisplay();
-      PLOGI.printf("[4kpDebug][owned_scanout] gbm_device=%p egl_display=%p drm_fd=%d", (void*)dev, (void*)dpy, m_drmFd);
-
-      if (dev == nullptr || dpy == EGL_NO_DISPLAY)
-      {
-         PLOGE << "[4kpDebug][owned_scanout] probe aborted: no gbm device or no current EGL display on this thread";
-         return;
-      }
-
-      std::string err;
-      const bool ok = m_ownedSlots.Init(m_drmFd, dev, dpy, w, h, fmt, err);
-
-      if (ok)
-         PLOGI.printf("[4kpDebug][owned_scanout] pool ready: %d slots %ux%u fourcc 0x%08x -- imported to GL, framebuffer complete, registered with DRM",
-            m_ownedSlots.Count(), w, h, fmt);
-      else
-         PLOGE.printf("[4kpDebug][owned_scanout] pool FAILED: %s (%ux%u fourcc 0x%08x)", err.c_str(), w, h, fmt);
-   }
-
    // The atomic commit itself, shared by the gbm_surface path and the owned-slot path so the four
    // hard contracts at the top of this file live in exactly one place. srcW/srcH describe the
    // BUFFER, which is not the mode whenever the buffer is deliberately smaller (BackBufferScale).
-   bool CommitFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH, const bool reflectY = false)
+   bool CommitFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH)
    {
       errno = 0;
       // Contract 1: mint the fence, and close it unconditionally below.
@@ -397,17 +359,6 @@ public:
          // and a reflect bit on its own is rejected with EINVAL. That rejection is what made the owned
          // path fall back to the EGL surface every frame while the picture still looked right -- an
          // invisible fallback is worse than a visible failure.
-         // Always state the rotation explicitly rather than inheriting whatever is already on the
-         // plane: it is CRTC state that survives a process, so a session that exited badly would
-         // otherwise decide how this one looks.
-         if (m_props.rotation != 0 && SupportsReflectY())
-         {
-            addFailed |= drmModeAtomicAddProperty(req, p, m_props.rotation,
-               reflectY ? (kRotate0 | kReflectY) : kRotate0) < 0;
-            m_rotationTouched = true; // so it can be put back on the way out
-         }
-         if (fenceFd >= 0)
-            addFailed |= drmModeAtomicAddProperty(req, p, m_props.inFenceFd, (uint64_t)fenceFd) < 0;
          // Contract 2: full geometry every commit. SRC_* are 16.16 fixed point.
          // Base rect fills the panel; the adjustment scales it about the centre and shifts it. Clamped
          // into the CRTC because a rect hanging off the edge is rejected outright, which would drop
@@ -457,8 +408,8 @@ public:
          // whole diagnosis -- EINVAL is a rejected property or geometry, EBUSY a commit still in
          // flight, EACCES a lost DRM master.
          if (m_commitErrors < 3)
-            PLOGE.printf("[4kpDebug][owned_scanout] crtc=%u atomic commit failed: ret=%d errno=%d (%s) fb=%u src=%ux%u reflectY=%d addFailed=%d",
-               m_crtcId, ret, errno, strerror(errno), fbId, srcW, srcH, reflectY ? 1 : 0, addFailed);
+            PLOGE.printf("[4kpDebug][owned_scanout] crtc=%u atomic commit failed: ret=%d errno=%d (%s) fb=%u src=%ux%u addFailed=%d",
+               m_crtcId, ret, errno, strerror(errno), fbId, srcW, srcH, addFailed);
          ++m_commitErrors;
          return false;
       }
@@ -467,45 +418,6 @@ public:
    }
 
 
-   // Present a buffer we own rather than one the EGL surface handed us. No gbm_surface locking and
-   // no buffer release: the slots are ours for the process lifetime, so the only contract that still
-   // applies is one commit in flight per CRTC.
-   // Put the plane's rotation back the way we found it. MUST run before VPX exits: the property is
-   // CRTC state that outlives the process, so a plane left reflected leaves the whole cabinet
-   // upside down -- launcher, menus, everything -- until a reboot. Nothing else on the system sets
-   // rotation, so nothing else will put it right.
-   void RestorePlaneRotation()
-   {
-      if (!m_ready || m_props.rotation == 0 || !m_rotationTouched)
-         return;
-
-      drmModeAtomicReqPtr req = drmModeAtomicAlloc();
-      if (req == nullptr)
-         return;
-      if (drmModeAtomicAddProperty(req, m_props.planeId, m_props.rotation, kRotate0) >= 0)
-      {
-         // Blocking and without a page flip event: this is the last thing we do, and it has to land
-         // before the process goes away.
-         const int ret = drmModeAtomicCommit(m_drmFd, req, 0, nullptr);
-         PLOGI.printf("[4kpDebug][owned_scanout] crtc=%u plane rotation restored to ROTATE_0 (ret=%d)", m_crtcId, ret);
-      }
-      drmModeAtomicFree(req);
-      m_rotationTouched = false;
-   }
-
-   bool PresentOwnedFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH, const bool reflectY)
-   {
-      if (!m_ready || fbId == 0)
-         return false;
-      DrainPendingFlip(); // Contract 3
-      return CommitFb(fbId, srcW, srcH, reflectY);
-   }
-
-   // Does this plane support the vertical reflect the owned path needs? Reported once so a build
-   // that silently renders upside down is distinguishable from one that cannot flip at all.
-   bool SupportsReflectY() const { return (m_props.rotationMask & (kRotate0 | kReflectY)) == (kRotate0 | kReflectY); }
-   static constexpr uint64_t kRotate0 = 1ull << 0;  // DRM_MODE_ROTATE_0
-   static constexpr uint64_t kReflectY = 1ull << 5; // DRM_MODE_REFLECT_Y
 
    // Call on the thread that owns the GL/EGL context, immediately after BGFX has swapped, so the
    // front buffer exists and eglGetCurrentDisplay() is valid for minting the fence.
@@ -715,9 +627,6 @@ private:
    int m_drmFd = -1;
    uint32_t m_crtcId = 0;
    struct gbm_surface* m_surface = nullptr;
-   ScanoutSlots m_ownedSlots; // held for the process lifetime; see ProbeOwnedScanout
-   bool m_ownedScanoutProbed = false;
-   bool m_rotationTouched = false;
    struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
    struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
    static constexpr int kMaxTrackedBos = 8;

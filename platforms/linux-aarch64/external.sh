@@ -196,9 +196,6 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
    # FORK PATCH (4kp): GPU timer queries on GLES + per-view stats. Both are bgfx gaps rather than
    # fork behaviour and are upstreamable as-is; see the header of the patch file.
    ( cd bgfx && patch -p1 < "${VPX_PATCH_DIR}/bgfx-gles-timer-and-view-stats.patch" )
-   # FORK PATCH (4kp): let VPX present every surface itself. eglSwapBuffers waits for the whole
-   # context's GPU work, which serialises the frame when something else owns presentation.
-   ( cd bgfx && patch -p1 < "${VPX_PATCH_DIR}/bgfx-skip-present.patch" )
    # FORK PATCH (4kp): build BGFX GLES-only. bgfx's shared glcontext_egl binds EGL_OPENGL_API when
    # BGFX_CONFIG_RENDERER_OPENGL is enabled, and libmali on this device is GLES-only, so that call
    # fails with EGL_BAD_PARAMETER (0x300C) and BGFX aborts: "Could not set API! error: 12300".

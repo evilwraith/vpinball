@@ -1894,13 +1894,6 @@ RenderDevice::RenderDevice(
 
 RenderDevice::~RenderDevice()
 {
-   #ifdef __RK3588__
-   // Before anything else is torn down, and while we still hold DRM master: plane rotation is
-   // CRTC state that outlives this process, so a reflected plane would leave the whole cabinet
-   // upside down until a reboot.
-   RestoreKmsPlaneState();
-   #endif
-
    #if defined(ENABLE_BGFX)
       // Suspend rendering before deleting anything that could be used
       m_renderDeviceAlive = false;
@@ -2368,151 +2361,11 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // Verified rather than assumed: getInternal() must hand back the same GL id we supplied, since
 // overrideInternal returning silently without taking effect would otherwise look identical to
 // success right up until the display showed the wrong buffer.
-// Defined by our bgfx patch (vpx-patches/bgfx-skip-present.patch).
-extern "C" void bgfx_set_skip_present(bool skip);
-
-void RenderDevice::DisableOwnedScanout(const char* why)  // NOLINT
-{
-   PLOGE << "[4kpDebug][owned_scanout] " << why << "; falling back to the EGL surface path";
-   bgfx_set_skip_present(false);
-   m_ownedScanoutPresentSkipped = false;
-   for (size_t i = 0; i < m_ownedScanout.size() && i < m_outputWnd.size(); ++i)
-   {
-      if (m_ownedScanout[i].active && m_ownedScanout[i].originalBackBuffer != nullptr)
-         m_outputWnd[i]->SetBackBuffer(m_ownedScanout[i].originalBackBuffer, false);
-      m_ownedScanout[i].active = false;
-   }
-}
-
-// Give one window's scanout buffers to BGFX and point that window's back buffer at them.
-//
-// Two frames: bgfx defers texture creation to the next frame(), so overriding in the same frame is
-// dropped (returns 0) while the framebuffer still reports valid -- wrapping bgfx's own allocation.
-void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, const VPX::Kms::ScanoutSlots& slots, VPX::Window* wnd)
-{
-   if (m_ownedScanout.size() < m_outputWnd.size())
-      m_ownedScanout.resize(m_outputWnd.size());
-   OwnedScanout& own = m_ownedScanout[idx];
-   if (own.bindStep > 1 || !slots.IsReady())
-      return;
-
-   const uint16_t w = uint16_t(wnd->GetPixelWidth());
-   const uint16_t h = uint16_t(wnd->GetPixelHeight());
-
-   if (own.bindStep == 0)
-   {
-      for (int i = 0; i < slots.Count(); ++i)
-      {
-         own.tex[i] = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
-         if (!bgfx::isValid(own.tex[i]))
-         {
-            PLOGE.printf("[4kpDebug][owned_scanout] window %zu slot %d: createTexture2D failed", idx, i);
-            own.bindStep = 2;
-            return;
-         }
-      }
-      own.bindStep = 1;
-      return;
-   }
-
-   own.bindStep = 2;
-   bool allValid = true;
-
-   for (int i = 0; i < slots.Count(); ++i)
-   {
-      const VPX::Kms::ScanoutSlots::Slot& slot = slots.GetSlot(i);
-      const uintptr_t bound = bgfx::overrideInternal(own.tex[i], uintptr_t(slot.texture));
-      const bool tookEffect = (bound == uintptr_t(slot.texture));
-
-      if (tookEffect)
-      {
-         // Only the playfield composites with depth; the ancillary panels are 2D and their existing
-         // back buffers carry no depth attachment either.
-         if (idx == 0)
-         {
-            const bgfx::TextureHandle depth = bgfx::createTexture2D(w, h, false, 1,
-               bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
-            if (bgfx::isValid(depth))
-            {
-               bgfx::TextureHandle attachments[2] = { own.tex[i], depth };
-               own.fb[i] = bgfx::createFrameBuffer(2, attachments, false);
-            }
-         }
-         else
-         {
-            own.fb[i] = bgfx::createFrameBuffer(1, &own.tex[i], false);
-         }
-      }
-
-      if (!bgfx::isValid(own.fb[i]))
-         allValid = false;
-
-      PLOGI.printf("[4kpDebug][owned_scanout] window %zu slot %d: gl texture %u -> bgfx texture %u, override %s, framebuffer %s",
-         idx, i, slot.texture, own.tex[i].idx, tookEffect ? "MATCH" : "did not take",
-         bgfx::isValid(own.fb[i]) ? "valid" : "INVALID");
-   }
-
-   if (!allValid)
-   {
-      PLOGE.printf("[4kpDebug][owned_scanout] window %zu: a slot was unusable; staying on the EGL surface path", idx);
-      return;
-   }
-
-   for (int i = 0; i < slots.Count(); ++i)
-      own.rt[i] = new RenderTarget(this, SurfaceType::RT_DEFAULT, own.fb[i], own.tex[i], bgfx::TextureFormat::BGRA8,
-         BGFX_INVALID_HANDLE, idx == 0 ? bgfx::TextureFormat::D24S8 : bgfx::TextureFormat::Count,
-         "OwnedScanout" + std::to_string(idx) + '.' + std::to_string(i), wnd->GetPixelWidth(), wnd->GetPixelHeight(),
-         BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
-
-   own.originalBackBuffer = wnd->GetBackBuffer();
-   own.slot = 0;
-   own.rt[0]->RequestClear();
-   wnd->SetBackBuffer(own.rt[0], false);
-   own.active = true;
-   PLOGI.printf("[4kpDebug][owned_scanout] window %zu redirected; cycling %d owned buffers", idx, slots.Count());
-
-}
-
-// Presentation can only be skipped once EVERY window is owned: eglSwapBuffers on any surface drains
-// the whole context, so one window left on the EGL path re-serialises all of them -- which is
-// exactly what skipping the primary alone achieved, namely nothing.
-//
-// Evaluated once per frame after every window has been through the loop, rather than inside the
-// per-window bind where it depended on which window happened to finish last.
-void RenderDevice::UpdateOwnedScanoutPresentSkip()
-{
-   if (m_ownedScanoutPresentSkipped || m_outputWnd.empty() || m_ownedScanout.size() < m_outputWnd.size())
-      return;
-
-   size_t active = 0;
-   for (size_t i = 0; i < m_outputWnd.size(); ++i)
-      if (m_ownedScanout[i].active)
-         ++active;
-
-   if (active != m_outputWnd.size())
-      return;
-
-   m_ownedScanoutPresentSkipped = true;
-   bgfx_set_skip_present(true);
-   PLOGI.printf("[4kpDebug][owned_scanout] all %zu windows owned; BGFX presentation skipped entirely", active);
-}
-
 static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
-
-// Undo anything we changed on the display hardware. Plane rotation is CRTC state that survives
-// the process, so leaving it set would leave every panel upside down until a reboot.
-void RenderDevice::RestoreKmsPlaneState()
-{
-   for (auto& [wnd, presenter] : s_presenters)
-      presenter.RestorePlaneRotation();
-}
 
 void RenderDevice::PresentKmsWindows()
 {
 
-
-   const bool ownedEnabled = g_pplayer && g_pplayer->m_ptable
-      && g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout();
 
    for (size_t wndIdx = 0; wndIdx < m_outputWnd.size(); ++wndIdx)
    {
@@ -2522,41 +2375,6 @@ void RenderDevice::PresentKmsWindows()
          continue;
 
       VPX::Kms::WindowPresenter& presenter = s_presenters[core];
-      if (ownedEnabled)
-      {
-         presenter.ProbeOwnedScanout();
-         BindOwnedScanoutToBgfx(wndIdx, presenter.GetOwnedSlots(), wnd);
-
-         // Only meaningful once the presenter has discovered its plane properties; asking earlier
-         // reads a zeroed mask and always answers "not supported".
-         if (!m_ownedScanoutReflectLogged && presenter.IsReady() && (wndIdx == 0))
-         {
-            m_ownedScanoutReflectLogged = true;
-            PLOGI.printf("[4kpDebug][owned_scanout] playfield plane vertical reflect: %s",
-               presenter.SupportsReflectY() ? "supported" : "NOT SUPPORTED -- image will be upside down");
-         }
-      }
-
-      // Owned path: commit the buffer we rendered into, rather than whatever the EGL surface has.
-      // Any failure drops EVERY window back to the surface path -- a mixed state is worse than
-      // either, because a single EGL swap re-serialises the frame for all of them.
-      if (wndIdx < m_ownedScanout.size() && m_ownedScanout[wndIdx].active)
-      {
-         OwnedScanout& own = m_ownedScanout[wndIdx];
-         const VPX::Kms::ScanoutSlots::Slot& slot = presenter.GetOwnedSlots().GetSlot(own.slot);
-         if (presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight(),
-                g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanoutReflect()))
-         {
-            // Move to the next buffer for the frame about to be built, so rendering never lands in
-            // the one just handed to the display.
-            own.slot = (own.slot + 1) % VPX::Kms::kScanoutSlotCount;
-            // The buffer we are about to draw into still holds the frame from three frames ago.
-            own.rt[own.slot]->RequestClear();
-            wnd->SetBackBuffer(own.rt[own.slot], false);
-            continue;
-         }
-         DisableOwnedScanout(("owned commit failed on window " + std::to_string(wndIdx)).c_str());
-      }
       if (!presenter.IsReady())
       {
          const SDL_PropertiesID props = SDL_GetWindowProperties(core);
@@ -2592,8 +2410,6 @@ void RenderDevice::PresentKmsWindows()
       }
       presenter.Present();
    }
-   // Once every window is owned, BGFX never needs to present again.
-   UpdateOwnedScanoutPresentSkip();
 }
 #endif
 
