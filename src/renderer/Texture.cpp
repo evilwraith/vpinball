@@ -167,7 +167,7 @@ std::shared_ptr<BaseTexture> BaseTexture::CreateFromData(const void* data, const
       if ((maxTexDimension > 0) && (maxTexDimension < 32768) && (fif == FIF_JPEG || fif == FIF_PNG || fif == FIF_EXR))
          loadFlags = static_cast<int>(maxTexDimension) << 16;
       // Load
-      FIBITMAP * const dib = FreeImage_LoadFromMemory(fif, dataHandle, loadFlags);
+      FIBITMAP * const dib = FreeImage_LoadFromMemory(fif, dataHandle, fif == FIF_PNG ? PNG_IGNOREGAMMA : 0);
       FreeImage_CloseMemory(dataHandle);
       tex = dib ? BaseTexture::CreateFromFreeImage(dib, isImageData, maxTexDimension, resizeOnLowMem) : nullptr;
    }

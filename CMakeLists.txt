@@ -455,7 +455,7 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       -mssse3
       $<$<CXX_COMPILER_ID:GNU>:
          -ffast-math
-         -ffp-contract=fast
+         -ffp-contract=off
          -Wno-template-body>
    )
 
@@ -592,7 +592,7 @@ elseif(PLATFORM STREQUAL "macos")
       -fapprox-func
       -fno-math-errno
       -fno-trapping-math
-      -ffp-contract=fast
+      -ffp-contract=off
       -Wno-shorten-64-to-32
       $<$<AND:$<STREQUAL:${ARCH},x64>,$<STREQUAL:${RENDERER},GL>>:-mssse3>
    )
@@ -729,11 +729,11 @@ elseif(PLATFORM STREQUAL "linux")
          -fapprox-func
          -fno-math-errno
          -fno-trapping-math
-         -ffp-contract=fast
+         -ffp-contract=off
          -Wno-shorten-64-to-32>
       $<$<CXX_COMPILER_ID:GNU>:
          -ffast-math
-         -ffp-contract=fast
+         -ffp-contract=off
          -Wno-changes-meaning>
       $<$<STREQUAL:${ARCH},x64>:-mssse3>
    )
@@ -867,11 +867,11 @@ elseif(PLATFORM STREQUAL "ios" OR PLATFORM STREQUAL "ios-simulator" OR PLATFORM 
          -fapprox-func
          -fno-math-errno
          -fno-trapping-math
-         -ffp-contract=fast
+         -ffp-contract=off
          -Wno-shorten-64-to-32>
       $<$<CXX_COMPILER_ID:GNU>:
          -ffast-math
-         -ffp-contract=fast
+         -ffp-contract=off
          -Wno-changes-meaning>
    )
 

@@ -4,6 +4,7 @@
 
 #include "common.h"
 #include <functional>
+#include <mutex>
 #include <unordered_dense.h>
 #include "forms/FormBackglass.h"
 #include "classes/B2SCollectData.h"
@@ -40,10 +41,18 @@ public:
    void SetPuPHide(bool puPHide);
    void B2SSetData(int id, int value);
    void B2SSetData(const string& name, int value);
+   void B2SSetData(int id, const string& value);
+   void B2SSetData(const string& name, const string& value);
    void B2SPulseData(int id);
    void B2SPulseData(const string& name);
    void B2SSetPos(int id, int xpos, int ypos);
-   void B2SSetPos(const string& name, int xpos, int ypos);
+   void B2SSetPos(int id, int xpos, const string& ypos);
+   void B2SSetPos(int id, const string& xpos, int ypos);
+   void B2SSetPos(int id, const string& xpos, const string& ypos);
+   void B2SSetPos(const string& id, int xpos, int ypos);
+   void B2SSetPos(const string& id, int xpos, const string& ypos);
+   void B2SSetPos(const string& id, const string& xpos, int ypos);
+   void B2SSetPos(const string& id, const string& xpos, const string& ypos);
    void B2SSetIllumination(const string& name, int value);
    void B2SSetLED(int digit, int value);
    void B2SSetLED(int digit, const string& text);
@@ -104,6 +113,8 @@ public:
    uint32_t GetEndpointId() const { return m_endpointId; }
    void SetOnDestroyHandler(std::function<void(Server*)> handler) { m_onDestroyHandler = handler; }
    float GetState(int b2sId) const;
+   int GetPlayerScore(int playerno) const;
+   int GetScoreDigit(int digit) const;
    void GetChangedLamps();
    void GetChangedLamps(ScriptVariant* pRet);
    void GetChangedSolenoids();
@@ -176,6 +187,8 @@ private:
 
    static Server* m_singleton;
    ankerl::unordered_dense::map<int, float> m_b2sStates;
+   ankerl::unordered_dense::map<int, int> m_playerScores;
+   ankerl::unordered_dense::map<int, int> m_scoreDigits;
    string m_controllerGameId;
    bool m_gameRunning = false;
    const unsigned int m_onControllersChangedId;
@@ -183,6 +196,8 @@ private:
    const unsigned int m_onGetStateSrcId;
    const unsigned int m_onStateChangeEventId;
    StateSrcId m_stateSrc { };
+   mutable std::mutex m_stateSrcMutex;
+   vector<StateGroupDef> m_stateGroupDefs = { { "Illuminations", "", 0x0001 }, { "Scores (players)", "", 0x0002 }, { "Scores (digits)", "", 0x0003 } };
    vector<string> m_stateSrcNames;
    void UpdateStateSrc();
    static void OnGetStateSrc(const unsigned int, void*, void* msgData);
