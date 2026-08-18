@@ -19,11 +19,11 @@ FREEIMAGE_PATCHSET=scaled-decode-png-exr-001
 # Fetched unconditionally because external.sh cannot know the compiler CMake will pick; on GCC 13+
 # the headers are simply never included.
 FMT_SHA=11.1.4
-BGFX_CMAKE_VERSION=1.153.9385-561
-BGFX_PATCH_SHA=9bec2b3dd1cbb2082f88fc3881ccfa5a09250769
 # 4kp: KMSDRM/GBM EGL hunks ported from evilwraith/bgfx@03f25e9 (branch 4kp_fixes)
 BGFX_PATCHSET=kmsdrm-gbm-egl-gles-only-profiler-007
-PINMAME_SHA=c5e82cad15f8a2a021cbdbd5419a38c5cd4d459d
+BGFX_CMAKE_VERSION=1.153.9398-566
+BGFX_PATCH_SHA=93b82acafc49fc90d13848e2c764b655adccc8ad
+PINMAME_SHA=11f8bc18b0781b45ae133acad04c83aeeaf38496
 OPENXR_SHA=b15ef6ce120dad1c7d3ff57039e73ba1a9f17102
 LIBDMDUTIL_SHA=3485e2e0e1e9252148914cd613510ccad7bb56b5
 LIBALTSOUND_SHA=f4b790a19ae45a9f93ae0051df6933800c7a6446
