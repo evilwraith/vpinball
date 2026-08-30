@@ -24,12 +24,13 @@
 // - Machine state (switch, controlled device, logic game states),
 // - Alphanumeric segment displays,
 // - Matrix displays (dot matrix, CRT,...).
-// 
+//
 // The design is based around a simple service discovery:
-// - a GetSource message is defined for each feature CTLPI_xxx_GET_SRC_MSG), 
-//   together with a SourceChangeEvent (CTLPI_xxx_ON_SRC_CHG_MSG).
+// - a GetSource message is defined for each feature CTLPI_xxx_GET_SRC_MSG),
+//   together with a SourceChangeEvent (CTLPI_xxx_ON_SRC_CHG_MSG), allowing
+//   to advertise a distributed list for each controller components.
 // - Data provided as an answer to a GetSource message **MUST** remain valid
-//   until the next SourceChangeEvent is broadcasted.
+//   until the next SourceChangeEvent is broadcasted **AND** processed.
 // - Sources are advertised with the function hooks that allow to request them.
 //   Unless explicitely specified, these hooks are not thread safe and must be
 //   called on the plugin API thread (the one calling plugin's Load/Unload).
@@ -38,27 +39,21 @@
 // - GetSource messages use the same design as Vulkan to evaluate the needed
 //   array size: the count field is increased to the number of items while
 //   only maxEntryCount are actually copied into the output array.
+// - C++ Helpers are provided to limit boiler plate code, and ease using these
+//   while enforcing threading safety.
 
 #define CTLPI_NAMESPACE               "Controller"
 
 // Generic structure used to identify a resource belonging to an endpoint (a single endpoint may only exposes one controller)
 typedef union CtlResId
 {
-   struct {
+   struct
+   {
       uint32_t endpointId;
       uint32_t resId;
    };
    uint64_t id;
 } CtlResId;
-
-typedef struct GetCtrlSrcMsg
-{
-   // Request
-   unsigned int maxEntryCount; // see below
-   // Response
-   unsigned int count; // Number of entries, also position to put next entry, should be increased even if exceeding maxEntryCount to get the total count
-   void* entries; // Pointer to an array of maxEntryCount entries to be filled
-} GetCtrlSrcMsg;
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -99,52 +94,40 @@ typedef struct GetControllersMsg
 // Request subscribers to fill up an array with the list of state blocks, message data is a pointer to a GetStateSrcMsg structure
 #define CTLPI_STATE_GET_SRC_MSG       "GetStateSrc"
 
-typedef struct StateGroupDef
-{
-   const char* name; // User friendly name, or null if not available, owned by the provider
-   const char* desc; // User friendly description, or null if not available, owned by the provider
-   uint16_t id;
-} StateGroupDef;
+#define CTLPI_STATE_FORMAT_UINT8              1
+#define CTLPI_STATE_FORMAT_UINT16             2
+#define CTLPI_STATE_FORMAT_UINT32             3
+#define CTLPI_STATE_FORMAT_UINT64             4
+#define CTLPI_STATE_FORMAT_INT8               5
+#define CTLPI_STATE_FORMAT_INT16              6
+#define CTLPI_STATE_FORMAT_INT32              7
+#define CTLPI_STATE_FORMAT_INT64              8
+#define CTLPI_STATE_FORMAT_FLOAT              9
+#define CTLPI_STATE_FORMAT_DOUBLE            10
+#define CTLPI_STATE_FORMAT_STRING            11 // 0 ended char string, UTF8 encoded, owned by the controller
 
-#define CTLPI_STATE_TYPE_UINT8            0x0001
-#define CTLPI_STATE_TYPE_UINT16           0x0002
-#define CTLPI_STATE_TYPE_UINT32           0x0004
-#define CTLPI_STATE_TYPE_UINT64           0x0008
-#define CTLPI_STATE_TYPE_INT8             0x0010
-#define CTLPI_STATE_TYPE_INT16            0x0020
-#define CTLPI_STATE_TYPE_INT32            0x0040
-#define CTLPI_STATE_TYPE_INT64            0x0080
-#define CTLPI_STATE_TYPE_FLOAT            0x0100
-#define CTLPI_STATE_TYPE_DOUBLE           0x0200
-#define CTLPI_STATE_TYPE_STRING           0x0400 // 0 ended char string, UTF8 encoded, owned by the controller
-
-typedef union CtlStateId
-{
-   struct {
-      uint32_t groupId;
-      uint32_t stateId;
-   };
-   uint64_t mappingId;
-} CtlStateId;
+#define CTLPI_STATE_TYPE_CUSTOM               0 // Custom game state, precise definition must be provided by the controller
+#define CTLPI_STATE_TYPE_SWITCH               1 // Binary switch state: 0 for opened, non 0 for closed
+#define CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS  2 // Relative linear brightness: linear perceived luminance normalized to the positive data range of the data format (0..1, 0..255,...)
 
 typedef struct StateDef
 {
    const char* name; // User friendly name, or null if not available, owned by the provider
    const char* desc; // User friendly description, or null if not available, owned by the provider
-   CtlStateId id; // User friendly unique mapping id
-   int typeMask; // State's supported data type mask. This are the only data types that can be requested/writed, see CTLPI_STATE_TYPE_xxx defines
-   int writable; // Non 0 if the state is writable
+   uint32_t mappingId; // User friendly mapping id
+   int dataFormat; // Data format, see CTLPI_STATE_FORMAT_xxx defines
+   int semanticType; // Game state type, see CTLPI_STATE_TYPE_xxx defines
+   void(MSGPIAPI* GetState)(CtlResId blockId, unsigned int stateIndex, void* pResult); // Pointer to function to request a state, thread safe, may be null, pResult points to a memblock corresponding to format
+   void(MSGPIAPI* SetState)(CtlResId blockId, unsigned int stateIndex, const void* pValue); // Pointer to function to request a state change, thread safe, may be null, pResult points to a memblock corresponding to format (const char* for string)
 } StateDef;
 
 typedef struct StateSrcId
 {
-   CtlResId id; // Unique Id of the input block
-   unsigned int nGroups; // Number of groups
-   StateGroupDef* groupDefs; // Pointer to a block of nGroups StateGroupDef, owned by the provider, valid until a src changed event is broadcasted
+   CtlResId id; // Unique Id of the state block
+   const char* name; // User friendly name, or null if not available, owned by the provider
+   const char* desc; // User friendly description, or null if not available, owned by the provider
    unsigned int nStates; // Number of states
    StateDef* stateDefs; // Pointer to a block of nStates StateDef, owned by the provider, valid until a src changed event is broadcasted
-   int(MSGPIAPI* GetState)(unsigned int inputIndex, int type, void* pResult); // Pointer to function to request a state, thread safe, may be null, returns non 0 on error, pResult points to a memblock corresponding to type
-   int(MSGPIAPI* SetState)(unsigned int inputIndex, int type, void* pResult); // Pointer to function to request a state change, thread safe, may be null, returns non 0 on error, pResult points to a memblock corresponding to type
 } StateSrcId;
 
 typedef struct GetStateSrcMsg
@@ -162,11 +145,11 @@ typedef struct GetStateSrcMsg
 // CRT and Dot Matrix Displays (i.e. displays made of a regular matrix of dots)
 //
 // API is designed to support (at least) the following use cases:
-// - allow searching for the available display sources, suitable for frame 
-//   identification and/or frame rendering, allowing for sources to appear and 
+// - allow searching for the available display sources, suitable for frame
+//   identification and/or frame rendering, allowing for sources to appear and
 //   disappear at runtime (like PinMAME, FlexDMD, alphanumeric to DMD renderer,
 //   UltraDMD, VPinSpa,...)
-// - declare and provide improved variants of a display frame source, for 
+// - declare and provide improved variants of a display frame source, for
 //   example providing upscaling or colorization support, replacing a DMD by
 //   an LCD animated display,...
 //
@@ -320,7 +303,7 @@ typedef struct GetSegSrcMsg
 // to be exposed to the user for mixer levels. Audio sources may be overriden
 // (similar to displays) allowing plugins to upgrade/replace audio sources of
 // other plugins.
-// 
+//
 // An audio source must be referenced by each audio stream to allow the host
 // to handle overiding, global mixer, and routing to the right output.
 
@@ -377,18 +360,199 @@ typedef struct AudioUpdateMsg
 } AudioUpdateMsg;
 
 
-
-
 ///////////////////////////////////////////////////////////////////////////////
 //
 // The following helper macros are designed to easily use the API in standard C++
 //
+// CtrlItemProvider/CtrlItemConsumer allow to easily implement the shared & decentralized list of items exposed by plugins, following the GetSource/OnSourceChanged pattern, 
+// with automatic subscription/unsubscription and thread safety. The main challenge here is that the list of items is made of individual plugin owned blocks changing on the 
+// plugin API thread, while the datablock may be used from other threads.
+// 
+// To avoid any race condition:
+// - adding or removing datablocks to the shared & decentralized list must be done on the plugin API thread, and the list must be locked while being modified or read
+// - the datablocks must be valids before being advertised through the OnSourceChanged event and remain valid until after the next OnSourceChanged event is broadcasted & processed.
+// - the datablocks must be served through the GetSource function pointer, starting from the processing of the OnSourceChanged event until before the deregistration OnSourceChanged event is processed.
+//
 #ifdef __cplusplus
+#include <assert.h>
+#include <exception>
+#include <functional>
+#include <mutex>
+#include <thread>
+#include <utility>
 #include <vector>
 
+inline bool operator==(const CtlResId& a, const CtlResId& b) { return a.id == b.id; }
+
+inline bool operator==(const ControllerDef& a, const ControllerDef& b)
+{
+   return a.endpointId == b.endpointId //
+      && a.gameId == b.gameId; // pointer identity, not string content
+}
+
+inline bool operator!=(const ControllerDef& a, const ControllerDef& b) { return !(a == b); }
+
+inline bool operator==(const StateSrcId& a, const StateSrcId& b)
+{
+   return a.id == b.id //
+      && a.name == b.name // pointer identity, not string content
+      && a.desc == b.desc // pointer identity, not string content
+      && a.nStates == b.nStates //
+      && a.stateDefs == b.stateDefs; // pointer identity, not deep comparison
+}
+
+inline bool operator!=(const StateSrcId& a, const StateSrcId& b) { return !(a == b); }
+
+inline bool operator==(const DisplaySrcId& a, const DisplaySrcId& b)
+{
+   return a.id == b.id //
+      && a.groupId == b.groupId //
+      && a.overrideId == b.overrideId //
+      && a.width == b.width //
+      && a.height == b.height //
+      && a.hardware == b.hardware //
+      && a.frameFormat == b.frameFormat //
+      && a.GetRenderFrame == b.GetRenderFrame //
+      && a.identifyFormat == b.identifyFormat //
+      && a.GetIdentifyFrame == b.GetIdentifyFrame;
+}
+
+inline bool operator!=(const DisplaySrcId& a, const DisplaySrcId& b) { return !(a == b); }
+
+inline bool operator==(const SegSrcId& a, const SegSrcId& b)
+{
+   if (a.id != b.id //
+      || a.groupId != b.groupId //
+      || a.hardware != b.hardware //
+      || a.nElements != b.nElements //
+      || a.GetState != b.GetState)
+   {
+      return false;
+   }
+   for (unsigned int i = 0; i < a.nElements; ++i)
+   {
+      if (a.elementType[i] != b.elementType[i])
+         return false;
+   }
+   return true;
+}
+
+inline bool operator!=(const SegSrcId& a, const SegSrcId& b) { return !(a == b); }
+
+inline bool operator==(const AudioSrcId& a, const AudioSrcId& b)
+{
+   return a.id == b.id //
+      && a.overrideId == b.overrideId //
+      && a.name == b.name // pointer identity, not string content
+      && a.desc == b.desc // pointer identity, not string content
+      && a.target == b.target;
+}
+
+inline bool operator!=(const AudioSrcId& a, const AudioSrcId& b)
+{
+    return !(a == b);
+}
+
+namespace PinballPlugin::Controller
+{
+
+template <class T> struct GetCtrlSrcMsg
+{
+   // Request
+   unsigned int maxEntryCount; // see below
+   // Response
+   unsigned int count; // Number of entries, also position to put next entry, should be increased even if exceeding maxEntryCount to get the total count
+   T* entries; // Pointer to an array of maxEntryCount entries to be filled
+};
+
+// Simple item provider helper, single threaded, tied to the MsgAPI thread
+template <class T> class CtrlItemProvider
+{
+public:
+   CtrlItemProvider(const MsgPluginAPI* msgApi, uint32_t endpointId, const char* getMsgName, const char* onChangeMsgName)
+      : m_threadLock(std::this_thread::get_id())
+      , m_msgApi(msgApi)
+      , m_endpointId(endpointId)
+      , m_getMsgId(msgApi->GetMsgID(CTLPI_NAMESPACE, getMsgName))
+      , m_onChangeMsgId(msgApi->GetMsgID(CTLPI_NAMESPACE, onChangeMsgName))
+   {
+   }
+
+   ~CtrlItemProvider()
+   {
+      assert(std::this_thread::get_id() == m_threadLock);
+      ClearItems();
+      m_msgApi->ReleaseMsgID(m_getMsgId);
+      m_msgApi->ReleaseMsgID(m_onChangeMsgId);
+   }
+
+   void SetItem(const T& item)
+   {
+      // Note that we must do 2 change broadcast as the first (clear) broadcast ensures that there aren't any other thread using 
+      // the previous items before discarding them and advertising the new element. Doing it in a single pass would risk a threading
+      // crash if previous element were used while being discarded and replaced.
+      ClearItems();
+      AddItem(item);
+   }
+
+   void AddItem(const T& item)
+   {
+      assert(std::this_thread::get_id() == m_threadLock);
+      m_items.push_back(item);
+      if (m_items.size() == 1)
+         m_msgApi->SubscribeMsg(m_endpointId, m_getMsgId, OnGetItems, this);
+      m_msgApi->BroadcastMsg(m_endpointId, m_onChangeMsgId, nullptr);
+   }
+
+   void AddItems(const std::vector<T>& list)
+   {
+      assert(std::this_thread::get_id() == m_threadLock);
+      m_items.insert(m_items.end(), list.begin(), list.end());
+      if (m_items.size() == list.size())
+         m_msgApi->SubscribeMsg(m_endpointId, m_getMsgId, OnGetItems, this);
+      m_msgApi->BroadcastMsg(m_endpointId, m_onChangeMsgId, nullptr);
+   }
+
+   void ClearItems()
+   {
+      assert(std::this_thread::get_id() == m_threadLock);
+      if (m_items.empty())
+         return;
+      m_items.clear();
+      m_msgApi->UnsubscribeMsg(m_getMsgId, OnGetItems, this);
+      m_msgApi->BroadcastMsg(m_endpointId, m_onChangeMsgId, nullptr);
+   }
+
+private:
+   static void OnGetItems(const unsigned int eventId, void* userData, void* msgData)
+   {
+      CtrlItemProvider<T>* me = static_cast<CtrlItemProvider<T>*>(userData);
+      assert(std::this_thread::get_id() == me->m_threadLock);
+      GetCtrlSrcMsg<T>* getMsg = static_cast<GetCtrlSrcMsg<T>*>(msgData);
+      auto it = me->m_items.begin();
+      while (it != me->m_items.end() && getMsg->count < getMsg->maxEntryCount)
+      {
+         getMsg->entries[getMsg->count] = *it;
+         getMsg->count++;
+         ++it;
+      }
+      getMsg->count += static_cast<unsigned int>(std::distance(it, me->m_items.end()));
+   }
+
+   const std::thread::id m_threadLock;
+   const MsgPluginAPI* m_msgApi;
+   const uint32_t m_endpointId;
+   const unsigned int m_getMsgId;
+   const unsigned int m_onChangeMsgId;
+
+   std::vector<T> m_items;
+};
+
+// Gather a shared controller item list. Single threaded, tied to MsgAPI thread.
+// May not be used for State and Display items which expose non thread safe getter/setter members
 template <class T> static void GetCtrlItems(const MsgPluginAPI* msgApi, uint32_t endpointId, unsigned int getMsgId, std::vector<T>& list)
 {
-   GetCtrlSrcMsg getMsg = { 0, 0, nullptr };
+   GetCtrlSrcMsg<T> getMsg = { 0, 0, nullptr };
    msgApi->BroadcastMsg(endpointId, getMsgId, &getMsg);
    if (getMsg.count > 0)
    {
@@ -402,10 +566,12 @@ template <class T> static void GetCtrlItems(const MsgPluginAPI* msgApi, uint32_t
    }
 }
 
+// Gather a shared controller item list. Single threaded, tied to MsgAPI thread.
+// May not be used for State and Display items which expose non thread safe getter/setter members
 template <class T> static std::vector<T> GetCtrlItems(const MsgPluginAPI* msgApi, uint32_t endpointId, unsigned int getMsgId)
 {
    std::vector<T> list;
-   GetCtrlSrcMsg getMsg = { 0, 0, nullptr };
+   GetCtrlSrcMsg<T> getMsg = { 0, 0, nullptr };
    msgApi->BroadcastMsg(endpointId, getMsgId, &getMsg);
    if (getMsg.count > 0)
    {
@@ -415,4 +581,158 @@ template <class T> static std::vector<T> GetCtrlItems(const MsgPluginAPI* msgApi
    }
    return list;
 }
+
+// Provide a consumer with a list of items gathered from distributed plugin, in a multithreaded context.
+// . The list only mutates in SelectItems, on the MsgApi thread
+// . The list remain empty until SelectItems is called to populate it directly or as a consequence of a change event
+// . Items are immutable and valid from a change event until the end of processing of the corresponding end-of-life change event
+//   (Note that C++ prevents vector<const T> so this is not enforced, but is strictly required)
+// . Items may only be accessed through the `With` method to guarantee proper synchronization against list change events.
+// . When list change, the onItemsAboutToChange is first called. Before returning, onItemsAboutToChange **MUST**:
+//   - prevent client threads from starting new list-dependent operations;
+//   - wait for all existing list-dependent operations to complete;
+//   - discard all copied or borrowed data referring to the current items.
+// . The onItemsChanged callback is then called, allowing to resume processing.
+// . Clients may cache copies of items or item-derived data between change events.
+//   If the cached data borrows from provider-owned storage:
+//   - it may only be accessed as part of a With() operation;
+//   - it must be discarded by onItemsAboutToChange before that callback returns.
+template <class T> class CtrlItemConsumer
+{
+public:
+   CtrlItemConsumer(const MsgPluginAPI* msgApi, uint32_t endpointId, const char* getMsgName, const char* onChangeMsgName,
+      const std::function<void(std::vector<T>&)>& filterItems,
+      const std::function<void()>& onItemsAboutToChange,
+      const std::function<void()>& onItemsChanged)
+      : m_msgApiThreadId(std::this_thread::get_id())
+      , m_msgApi(msgApi)
+      , m_endpointId(endpointId)
+      , m_getMsgId(msgApi->GetMsgID(CTLPI_NAMESPACE, getMsgName))
+      , m_onChangeMsgId(msgApi->GetMsgID(CTLPI_NAMESPACE, onChangeMsgName))
+      , m_filterItems(filterItems)
+      , m_onItemsAboutToChange(onItemsAboutToChange)
+      , m_onItemsChanged(onItemsChanged)
+   {
+      m_msgApi->SubscribeMsg(m_endpointId, m_onChangeMsgId, OnItemsChanged, this);
+   }
+
+   CtrlItemConsumer(const CtrlItemConsumer&) = delete;
+   CtrlItemConsumer& operator=(const CtrlItemConsumer&) = delete;
+   CtrlItemConsumer(CtrlItemConsumer&&) = delete;
+   CtrlItemConsumer& operator=(CtrlItemConsumer&&) = delete;
+
+   ~CtrlItemConsumer()
+   {
+      assert(std::this_thread::get_id() == m_msgApiThreadId);
+      m_msgApi->UnsubscribeMsg(m_onChangeMsgId, OnItemsChanged, this);
+      if (m_onItemsAboutToChange)
+         m_onItemsAboutToChange();
+      m_msgApi->ReleaseMsgID(m_getMsgId);
+      m_msgApi->ReleaseMsgID(m_onChangeMsgId);
+   }
+
+   void SelectItems(const bool discardSameSelectionEvent)
+   {
+      assert(std::this_thread::get_id() == m_msgApiThreadId);
+
+      // Coalesce reentrant SelectItems() calls to avoid recursive updates.
+      if (m_isSelectingItems)
+      {
+         m_selectItemsPending = true;
+         // If at least one coalesced request requires a change event,
+         // preserve that requirement for the next iteration.
+         m_forceSelectionEvent |= !discardSameSelectionEvent;
+         return;
+      }
+
+      m_isSelectingItems = true;
+      m_selectItemsPending = true;
+      m_forceSelectionEvent = !discardSameSelectionEvent;
+
+      try
+      {
+         while (m_selectItemsPending)
+         {
+            m_selectItemsPending = false;
+            const bool forceSelectionEvent = std::exchange(m_forceSelectionEvent, false);
+            SelectItemsOnce(!forceSelectionEvent);
+         }
+      }
+      catch (...)
+      {
+         m_isSelectingItems = false;
+         m_selectItemsPending = false;
+         m_forceSelectionEvent = false;
+         throw;
+      }
+
+      m_isSelectingItems = false;
+   }
+
+   template <typename Func> auto With(Func&& func) const -> decltype(func(std::declval<const std::vector<T>&>()))
+   {
+      std::lock_guard lock(m_listMutex);
+      return std::forward<Func>(func)(m_items);
+   }
+
+private:
+   void SelectItemsOnce(bool discardSameSelectionEvent)
+   {
+      assert(std::this_thread::get_id() == m_msgApiThreadId);
+      std::vector<T> items = GetCtrlItems<T>(m_msgApi, m_endpointId, m_getMsgId);
+
+      if (!items.empty() && m_filterItems)
+         m_filterItems(items);
+
+      if (discardSameSelectionEvent)
+      {
+         std::lock_guard lock(m_listMutex); // Not entirely needed as items are const and list is readonly but cleaner
+         if (m_items == items)
+            return;
+      }
+
+      if (m_onItemsAboutToChange)
+         m_onItemsAboutToChange();
+      {
+         std::lock_guard lock(m_listMutex);
+         m_items = std::move(items);
+      }
+      if (m_onItemsChanged)
+         m_onItemsChanged();
+   }
+
+   static void OnItemsChanged(const unsigned int, void* userData, void*) noexcept
+   {
+      try
+      {
+         CtrlItemConsumer<T>* me = static_cast<CtrlItemConsumer<T>*>(userData);
+         me->SelectItems(true);
+      }
+      catch (...)
+      {
+         // All callbacks are required to be noexcept
+         assert(false && "CtrlItemConsumer callback unexpectedly threw");
+         std::terminate();
+      }
+   }
+
+   const std::thread::id m_msgApiThreadId;
+   const MsgPluginAPI* const m_msgApi;
+   const uint32_t m_endpointId;
+   const unsigned int m_getMsgId;
+   const unsigned int m_onChangeMsgId;
+   const std::function<void(std::vector<T>&)> m_filterItems;
+   const std::function<void()> m_onItemsAboutToChange;
+   const std::function<void()> m_onItemsChanged;
+
+   std::vector<T> m_items;
+   mutable std::mutex m_listMutex;
+
+   bool m_isSelectingItems = false;
+   bool m_selectItemsPending = false;
+   bool m_forceSelectionEvent = false;
+};
+
+};
+
 #endif

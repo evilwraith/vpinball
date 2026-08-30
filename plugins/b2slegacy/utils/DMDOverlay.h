@@ -10,7 +10,7 @@ namespace B2SLegacy {
 class DMDOverlay final
 {
 public:
-   DMDOverlay(ResURIResolver& resURIResolver, VPXTexture& dmdTex, VPXTexture backImage, VPXPluginAPI* vpxApi);
+   DMDOverlay(PinballPlugin::ResURIResolver& resURIResolver, VPXTexture& dmdTex, VPXTexture backImage, VPXPluginAPI* vpxApi);
    ~DMDOverlay();
    void Render(VPXRenderContext2D* context);
 
@@ -22,7 +22,7 @@ public:
 private:
    ivec4 SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) const;
 
-   ResURIResolver& m_resURIResolver;
+   PinballPlugin::ResURIResolver& m_resURIResolver;
    VPXTexture& m_dmdTex;
    VPXPluginAPI* m_vpxApi = nullptr;
 
@@ -34,6 +34,11 @@ private:
    CtlResId m_detectSrcId {};
    bool m_stopSearching = false;
    std::future<ivec4> m_frameSearch;
+
+   // Identity of the frame last uploaded to the texture, to avoid a full copy plus a GPU re-upload every frame
+   DisplaySrcId m_uploadedSrc {};
+   unsigned int m_uploadedFrameId = 0;
+   bool m_hasUploadedFrame = false;
 };
 
 }

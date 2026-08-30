@@ -487,8 +487,8 @@ void ScoreView::Select(const float scoreW, const float scoreH)
    const float rtAR = scoreW / scoreH;
 
    // Evaluate layouts against current context
-   ResURIResolver::SegDisplayState segDisplay;
-   ResURIResolver::DisplayState display;
+   PinballPlugin::ResURIResolver::SegDisplayState segDisplay;
+   PinballPlugin::ResURIResolver::DisplayState display;
    for (auto& layout : m_layouts)
    {
       const float layoutAR = layout.width / layout.height;
@@ -592,15 +592,21 @@ bool ScoreView::Render(VPXRenderContext2D* ctx)
       case VisualType::DMD:
       case VisualType::Screen:
       {
-         ResURIResolver::DisplayState dmd = m_resURIResolver.GetDisplayState(visual.srcUri);
+         PinballPlugin::ResURIResolver::DisplayState dmd = m_resURIResolver.GetDisplayState(visual.srcUri);
          if (dmd.state.frame == nullptr)
             continue;
          LoadGlass(visual);
-         m_vpxApi->UpdateTexture(&visual.dmdTex, dmd.source->width, dmd.source->height,
-              dmd.source->frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F  ? VPXTextureFormat::VPXTEXFMT_BW32F
-            : dmd.source->frameFormat == CTLPI_DISPLAY_FORMAT_SRGB565 ? VPXTextureFormat::VPXTEXFMT_sRGB565
-                                                                      : VPXTextureFormat::VPXTEXFMT_sRGB8,
-            dmd.state.frame);
+         if (!visual.hasUploadedFrame || (visual.dmdTex == nullptr) || (dmd.state.frameId != visual.uploadedFrameId) || (*dmd.source != visual.uploadedSrc))
+         {
+            m_vpxApi->UpdateTexture(&visual.dmdTex, dmd.source->width, dmd.source->height,
+                 dmd.source->frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F  ? VPXTextureFormat::VPXTEXFMT_BW32F
+               : dmd.source->frameFormat == CTLPI_DISPLAY_FORMAT_SRGB565 ? VPXTextureFormat::VPXTEXFMT_sRGB565
+                                                                         : VPXTextureFormat::VPXTEXFMT_sRGB8,
+               dmd.state.frame);
+            visual.uploadedSrc = *dmd.source;
+            visual.uploadedFrameId = dmd.state.frameId;
+            visual.hasUploadedFrame = true;
+         }
          vec4 glassArea;
          if (visual.glass == nullptr || visual.glassArea.z == 0.f || visual.glassArea.w == 0.f)
             glassArea = vec4(0.f, 0.f, 1.f, 1.f);
@@ -639,7 +645,7 @@ bool ScoreView::Render(VPXRenderContext2D* ctx)
 
       case VisualType::SegDisplay:
       {
-         ResURIResolver::SegDisplayState frame = m_resURIResolver.GetSegDisplayState(visual.srcUri);
+         PinballPlugin::ResURIResolver::SegDisplayState frame = m_resURIResolver.GetSegDisplayState(visual.srcUri);
          if ((frame.state.frame == nullptr) || (frame.source->nElements != visual.nElements))
             continue;
          LoadGlass(visual);

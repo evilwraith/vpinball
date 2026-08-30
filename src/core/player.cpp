@@ -1079,7 +1079,7 @@ Player::~Player()
       m_implicitVRBackglass = nullptr;
    }
 
-   m_renderer->m_renderDevice->m_DMDShader->SetTextureNull(SHADER_tex_dmd);
+   m_renderer->m_renderDevice->m_DMDShader->SetTextureNull(ShaderUniform::tex_dmd);
    if (m_dmdFrame)
    {
       m_renderer->m_renderDevice->m_texMan.UnloadTexture(m_dmdFrame.get());
@@ -2386,7 +2386,7 @@ void Player::OnAudioSrcChanged(const unsigned int msgId, void *userData, void *m
    std::lock_guard lock(me->m_audioSourceMutex);
 
    ankerl::unordered_dense::set<uint64_t> seenIds;
-   for (const auto &audioSrc : GetCtrlItems<AudioSrcId>(&me->m_pluginManager.GetMsgAPI(), me->m_pluginAPI.GetVPXEndPointId(), me->m_getAudioSrcMsgId))
+   for (const auto &audioSrc : PinballPlugin::Controller::GetCtrlItems<AudioSrcId>(&me->m_pluginManager.GetMsgAPI(), me->m_pluginAPI.GetVPXEndPointId(), me->m_getAudioSrcMsgId))
    {
       if (audioSrc.target != CTLPI_AUDIO_TARGET_BACKGLASS)
          continue;

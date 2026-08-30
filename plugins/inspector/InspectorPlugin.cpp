@@ -3,7 +3,6 @@
 #include "common.h"
 #include "plugins/MsgPlugin.h"
 #include "plugins/VPXPlugin.h"
-#include "pinmame/PinMAMEPlugin.h"
 #include "WebServer.h"
 
 #ifdef __APPLE__
@@ -21,6 +20,7 @@ using namespace std::string_literals;
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
+using namespace PinballPlugin::Controller;
 
 namespace Inspector
 {
@@ -31,22 +31,16 @@ static VPXPluginAPI* vpxApi = nullptr;
 static uint32_t endpointId;
 static unsigned int getVpxApiId;
 static unsigned int onControllersChangedId;
-static unsigned int onStateSrcChgId;
 static unsigned int onDisplaySrcChgId;
 static unsigned int onSegSrcChgId;
+
+static std::unique_ptr<PinballPlugin::Controller::CtrlItemConsumer<StateSrcId>> stateSources;
 
 MSGPI_INT_VAL_SETTING(portSetting, "port", "Web Server Port", "Port used by the inspector web server", true, 1024, 65535, 2113);
 
 static std::unique_ptr<WebServer> webServer;
 
-static std::mutex deviceStatesMutex;
-typedef struct
-{
-   unsigned int index;
-   int typeMask;
-   int(MSGPIAPI* GetState)(unsigned int index, int type, void* pResult);
-} StateProvider;
-static std::map<uint64_t, StateProvider> stateGetters;
+static std::mutex displayStateMutex;
 typedef struct
 {
    CtlResId id;
@@ -64,8 +58,7 @@ void UpdateTreeCache()
    if (!webServer)
       return;
 
-   std::lock_guard lock(deviceStatesMutex);
-   stateGetters.clear();
+   std::lock_guard lock(displayStateMutex);
    displayGetters.clear();
 
    json root = json::object();
@@ -78,19 +71,8 @@ void UpdateTreeCache()
       return;
    }
 
-   vector<ControllerDef> controllerDefs;
    const unsigned int getControllersId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_CONTROLLERS_GET_MSG);
-   {
-      GetControllersMsg getControllersMsg = { 0, 0, nullptr };
-      msgApi->BroadcastMsg(endpointId, getControllersId, &getControllersMsg);
-      if (getControllersMsg.count > 0)
-      {
-         const string pinmamePrefix(PMPI_GAMEID_PREFIX);
-         controllerDefs.resize(getControllersMsg.count);
-         getControllersMsg = { getControllersMsg.count, 0, controllerDefs.data() };
-         msgApi->BroadcastMsg(endpointId, getControllersId, &getControllersMsg);
-      }
-   }
+   vector<ControllerDef> controllerDefs = GetCtrlItems<ControllerDef>(msgApi, endpointId, getControllersId);
    msgApi->ReleaseMsgID(getControllersId);
 
    json tree = json::array();
@@ -120,81 +102,46 @@ void UpdateTreeCache()
       }
       return controllers[epId];
    };
+   for (const ControllerDef& controller : controllerDefs)
+      getController(controller.endpointId);
 
    // States
-   {
-      auto getGroup = [](std::map<uint32_t, json>& groups, uint16_t groupId, const std::string& name) -> json&
+   stateSources->With(
+      [&getController](const std::vector<StateSrcId>& items)
       {
-         if (groups.find(groupId) == groups.end())
+         for (const StateSrcId& stateDef : items)
          {
-            json cNode = json::object();
-            cNode["id"s] = groupId;
-            cNode["name"s] = name;
-            cNode["type"s] = "group";
-            cNode["children"s] = json::array();
-            groups[groupId] = cNode;
-         }
-         return groups[groupId];
-      };
-
-      unsigned int getStateMsgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_STATE_GET_SRC_MSG);
-      GetStateSrcMsg devMsg = { 0, 0, nullptr };
-      msgApi->BroadcastMsg(endpointId, getStateMsgId, &devMsg);
-      std::vector<StateSrcId> stateDefs(devMsg.count);
-      devMsg = { static_cast<unsigned int>(stateDefs.size()), 0, stateDefs.data() };
-      msgApi->BroadcastMsg(endpointId, getStateMsgId, &devMsg);
-      for (unsigned int i = 0; i < devMsg.count; i++)
-      {
-         auto& cNode = getController(devMsg.entries[i].id.endpointId);
-         json catNode = json::object();
-         catNode["name"s] = "Game States";
-         catNode["type"s] = "category";
-         catNode["children"s] = json::array();
-         std::map<uint32_t, json> groups;
-         for (unsigned int j = 0; j < devMsg.entries[i].nStates; j++)
-         {
-            json item = json::object();
-            item["type"s] = "state";
-            item["name"s] = devMsg.entries[i].stateDefs[j].name ? devMsg.entries[i].stateDefs[j].name : ("Device " + std::to_string(j));
-            item["desc"s] = devMsg.entries[i].stateDefs[j].desc ? devMsg.entries[i].stateDefs[j].desc : "No description available";
-            item["mapping"s] = std::to_string(devMsg.entries[i].stateDefs[j].id.mappingId);
-            item["writable"s] = devMsg.entries[i].stateDefs[j].writable;
-            item["dataType"s] = devMsg.entries[i].stateDefs[j].typeMask;
-            int groupIndex = -1;
-            for (unsigned int k = 0; k < devMsg.entries[i].nGroups; k++)
+            auto& cNode = getController(stateDef.id.endpointId);
+            json gNode = json::object();
+            gNode["id"s] = stateDef.id.resId;
+            gNode["name"s] = stateDef.name ? stateDef.name : "Unnamed state group";
+            gNode["desc"s] = stateDef.desc ? stateDef.desc : "";
+            gNode["type"s] = "stategroup";
+            gNode["children"s] = json::array();
+            for (unsigned int j = 0; j < stateDef.nStates; j++)
             {
-               if (devMsg.entries[i].groupDefs[k].id == devMsg.entries[i].stateDefs[j].id.groupId)
-               {
-                  groupIndex = k;
-                  break;
-               }
+               json item = json::object();
+               item["type"s] = "state";
+               // FIXME What should we expose as an id ? the mapping (stable, human friendly) or the index (unique) ?
+               item["id"s] = std::format("{:04X}.{:04X}.{:04X}", stateDef.id.endpointId, stateDef.id.resId, stateDef.stateDefs[j].mappingId);
+               item["mapping"s] = std::format("{:02d}", stateDef.stateDefs[j].mappingId);
+               item["name"s] = stateDef.stateDefs[j].name ? stateDef.stateDefs[j].name : ("Device " + std::to_string(j));
+               item["desc"s] = stateDef.stateDefs[j].desc ? stateDef.stateDefs[j].desc : "No description available";
+               item["format"s] = stateDef.stateDefs[j].dataFormat;
+               item["outputType"s] = stateDef.stateDefs[j].semanticType;
+               gNode["children"s].push_back(item);
             }
-            if (groupIndex >= 0)
-            {
-               auto& cGroup = getGroup(groups, devMsg.entries[i].stateDefs[j].id.groupId, devMsg.entries[i].groupDefs[groupIndex].name);
-               cGroup["children"s].push_back(item);
-               stateGetters[devMsg.entries[i].stateDefs[j].id.mappingId] = { j, devMsg.entries[i].stateDefs[j].typeMask, devMsg.entries[i].GetState };
-            }
+            cNode["children"s].push_back(gNode);
          }
-         for (auto& pair : groups)
-            catNode["children"s].push_back(pair.second);
-         cNode["children"s].push_back(catNode);
-      }
-      msgApi->ReleaseMsgID(getStateMsgId);
-   }
+      });
 
    // Displays
    {
       unsigned int getDisplaysMsgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_SRC_MSG);
-      GetDisplaySrcMsg dispMsg = { 0, 0, nullptr };
-      msgApi->BroadcastMsg(endpointId, getDisplaysMsgId, &dispMsg);
-      std::vector<DisplaySrcId> displayDefs(dispMsg.count);
-      dispMsg = { static_cast<unsigned int>(displayDefs.size()), 0, displayDefs.data() };
-      msgApi->BroadcastMsg(endpointId, getDisplaysMsgId, &dispMsg);
       std::map<uint32_t, json> displayCats;
-      for (unsigned int i = 0; i < dispMsg.count; i++)
+      for (const DisplaySrcId& displayDef : GetCtrlItems<DisplaySrcId>(msgApi, endpointId, getDisplaysMsgId))
       {
-         uint32_t epId = dispMsg.entries[i].id.endpointId;
+         uint32_t epId = displayDef.id.endpointId;
          if (displayCats.find(epId) == displayCats.end())
          {
             json catNode = json::object();
@@ -204,14 +151,15 @@ void UpdateTreeCache()
             displayCats[epId] = catNode;
          }
          json item = json::object();
-         item["name"s] = std::format("Display {} {}x{}", dispMsg.entries[i].id.resId, dispMsg.entries[i].width, dispMsg.entries[i].height);
          item["type"s] = "display";
-         item["mapping"s] = std::to_string(dispMsg.entries[i].id.id);
-         item["format"s] = dispMsg.entries[i].frameFormat;
-         item["hardware"s] = dispMsg.entries[i].hardware;
+         item["id"s] = std::to_string(displayDef.id.id);
+         item["mapping"s] = std::format("{:02d}", displayDef.id.resId);
+         item["name"s] = std::format("Display {} {}x{}", displayDef.id.resId, displayDef.width, displayDef.height);
+         item["format"s] = displayDef.frameFormat;
+         item["hardware"s] = displayDef.hardware;
          displayCats[epId]["children"s].push_back(item);
-         displayGetters[dispMsg.entries[i].id.id]
-            = { dispMsg.entries[i].id, dispMsg.entries[i].width, dispMsg.entries[i].height, dispMsg.entries[i].frameFormat, dispMsg.entries[i].GetRenderFrame };
+         displayGetters[displayDef.id.id]
+            = { displayDef.id, displayDef.width, displayDef.height, displayDef.frameFormat, displayDef.GetRenderFrame };
       }
       for (auto& pair : displayCats)
       {
@@ -224,21 +172,17 @@ void UpdateTreeCache()
    // Segment Displays
    {
       unsigned int getSegsMsgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_GET_SRC_MSG);
-      GetSegSrcMsg segMsg = { 0, 0, nullptr };
-      msgApi->BroadcastMsg(endpointId, getSegsMsgId, &segMsg);
-      std::vector<SegSrcId> displayDefs(segMsg.count);
-      segMsg = { static_cast<unsigned int>(displayDefs.size()), 0, displayDefs.data() };
-      msgApi->BroadcastMsg(endpointId, getSegsMsgId, &segMsg);
-      for (unsigned int i = 0; i < segMsg.count; i++)
+      for (const SegSrcId& segDef : GetCtrlItems<SegSrcId>(msgApi, endpointId, getSegsMsgId))
       {
-         auto& cNode = getController(segMsg.entries[i].id.endpointId);
+         auto& cNode = getController(segDef.id.endpointId);
          json catNode = json::object();
          catNode["name"s] = "Segment Displays";
          catNode["type"s] = "category";
          catNode["children"s] = json::array();
          json item = json::object();
-         item["name"s] = std::format("Seg Display {}", segMsg.entries[i].id.resId);
          item["type"s] = "seg_display";
+         item["name"s] = std::format("Seg Display {}", segDef.id.resId);
+         item["mapping"s] = std::format("{:02d}", segDef.id.resId);
          catNode["children"s].push_back(item);
          cNode["children"s].push_back(catNode);
       }
@@ -255,59 +199,75 @@ void UpdateTreeCache()
 
 std::string GetStatesJson()
 {
-   std::lock_guard lock(deviceStatesMutex);
-
    json states = json::array();
-   for (const auto& pair : stateGetters)
-   {
-      json dItem = json::object();
-      dItem["id"s] = std::to_string(pair.first);
-      if ((pair.second.typeMask & CTLPI_STATE_TYPE_FLOAT) != 0)
+   stateSources->With(
+      [&states](const std::vector<StateSrcId>& items)
       {
-         if (float state; pair.second.GetState(pair.second.index, CTLPI_STATE_TYPE_FLOAT, &state) == 0)
+
+      for (const StateSrcId& stateDef : items)
+      {
+         json dItem = json::object();
+         for (unsigned int j = 0; j < stateDef.nStates; j++)
          {
-            dItem["type"s] = "float";
-            dItem["state"s] = state;
-            states.push_back(dItem);
+            if (stateDef.stateDefs[j].GetState == nullptr)
+               continue;
+            dItem["id"s] = std::format("{:04X}.{:04X}.{:04X}", stateDef.id.endpointId, stateDef.id.resId, stateDef.stateDefs[j].mappingId);
+            dItem["type"s] = stateDef.stateDefs[j].semanticType;
+            switch (stateDef.stateDefs[j].dataFormat)
+            {
+            case CTLPI_STATE_FORMAT_FLOAT:
+            {
+               float state;
+               stateDef.stateDefs[j].GetState(stateDef.id, j, &state);
+               dItem["format"s] = "float";
+               dItem["state"s] = state;
+               states.push_back(dItem);
+            }
+            break;
+
+            case CTLPI_STATE_FORMAT_UINT8:
+            {
+               uint8_t state;
+               stateDef.stateDefs[j].GetState(stateDef.id, j, &state);
+               dItem["format"s] = "uint8";
+               dItem["state"s] = state;
+               states.push_back(dItem);
+            }
+            break;
+
+            case CTLPI_STATE_FORMAT_INT32:
+            {
+               int32_t state;
+               stateDef.stateDefs[j].GetState(stateDef.id, j, &state);
+               dItem["format"s] = "int32";
+               dItem["state"s] = state;
+               states.push_back(dItem);
+            }
+            break;
+
+            case CTLPI_STATE_FORMAT_INT64:
+            {
+               int64_t state;
+               stateDef.stateDefs[j].GetState(stateDef.id, j, &state);
+               dItem["format"s] = "int64";
+               dItem["state"s] = std::to_string(state);
+               states.push_back(dItem);
+            }
+            break;
+
+            case CTLPI_STATE_FORMAT_STRING:
+            {
+               char* state = nullptr;
+               stateDef.stateDefs[j].GetState(stateDef.id, j, &state);
+               dItem["format"s] = "string";
+               dItem["state"s] = state != nullptr ? state : "";
+               states.push_back(dItem);
+            }
+            break;
+            }
          }
       }
-      else if ((pair.second.typeMask & CTLPI_STATE_TYPE_UINT8) != 0)
-      {
-         if (uint8_t state; pair.second.GetState(pair.second.index, CTLPI_STATE_TYPE_UINT8, &state) == 0)
-         {
-            dItem["type"s] = "uint8";
-            dItem["state"s] = state;
-            states.push_back(dItem);
-         }
-      }
-      else if ((pair.second.typeMask & CTLPI_STATE_TYPE_INT32) != 0)
-      {
-         if (int32_t state; pair.second.GetState(pair.second.index, CTLPI_STATE_TYPE_INT32, &state) == 0)
-         {
-            dItem["type"s] = "int32";
-            dItem["state"s] = state;
-            states.push_back(dItem);
-         }
-      }
-      else if ((pair.second.typeMask & CTLPI_STATE_TYPE_INT64) != 0)
-      {
-         if (int64_t state; pair.second.GetState(pair.second.index, CTLPI_STATE_TYPE_INT64, &state) == 0)
-         {
-            dItem["type"s] = "int64";
-            dItem["state"s] = std::to_string(state);
-            states.push_back(dItem);
-         }
-      }
-      else if ((pair.second.typeMask & CTLPI_STATE_TYPE_STRING) != 0)
-      {
-         if (char* state; pair.second.GetState(pair.second.index, CTLPI_STATE_TYPE_STRING, &state) == 0)
-         {
-            dItem["type"s] = "int64";
-            dItem["state"s] = std::string(state);
-            states.push_back(dItem);
-         }
-      }
-   }
+   });
 
    json root = json::object();
    root["treeId"s] = treeId;
@@ -317,17 +277,19 @@ std::string GetStatesJson()
 
 namespace
 {
-   // Converts a raw DisplayFrame (as produced by DisplaySrcId::GetRenderFrame)
-   // into a top-down 24bpp RGB buffer. Returns an empty vector for unsupported
-   // frame formats.
-   std::vector<uint8_t> ConvertFrameToRgb24(unsigned int width, unsigned int height, unsigned int frameFormat, const void* frame)
+   // Converts a raw DisplayFrame (as produced by DisplaySrcId::GetRenderFrame) into a top-down 24bpp RGB
+   // buffer, written into 'dst' after 'offset' bytes left free for the caller's own header, so that the
+   // frame does not have to be copied again to prepend it. 'dst' is resized accordingly and its capacity
+   // is reused from call to call. Returns false for unsupported frame formats
+   bool ConvertFrameToRgb24(unsigned int width, unsigned int height, unsigned int frameFormat, const void* frame, size_t offset, std::vector<uint8_t>& dst)
    {
       const size_t count = static_cast<size_t>(width) * static_cast<size_t>(height);
-      std::vector<uint8_t> rgb(count * 3);
+      dst.resize(offset + count * 3);
+      uint8_t* const __restrict rgb = dst.data() + offset;
 
       if (frameFormat == CTLPI_DISPLAY_FORMAT_SRGB888)
       {
-         std::memcpy(rgb.data(), frame, count * 3);
+         std::memcpy(rgb, frame, count * 3);
       }
       else if (frameFormat == CTLPI_DISPLAY_FORMAT_SRGB565)
       {
@@ -335,12 +297,13 @@ namespace
          for (size_t i = 0; i < count; i++)
          {
             const uint16_t px = src[i];
-            const uint8_t r5 = static_cast<uint8_t>((px >> 11) & 0x1F);
-            const uint8_t g6 = static_cast<uint8_t>((px >> 5) & 0x3F);
-            const uint8_t b5 = static_cast<uint8_t>(px & 0x1F);
-            rgb[i * 3 + 0] = static_cast<uint8_t>((r5 * 255 + 15) / 31);
-            rgb[i * 3 + 1] = static_cast<uint8_t>((g6 * 255 + 31) / 63);
-            rgb[i * 3 + 2] = static_cast<uint8_t>((b5 * 255 + 15) / 31);
+            const uint32_t r5 = (px >> 11) & 0x1F;
+            const uint32_t g6 = (px >> 5) & 0x3F;
+            const uint32_t b5 = px & 0x1F;
+            // Replicate the high bits into the low ones, so that a full channel maps to 255 instead of 248
+            rgb[i * 3 + 0] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+            rgb[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+            rgb[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
          }
       }
       else if (frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F)
@@ -361,44 +324,49 @@ namespace
       }
       else
       {
-         return { }; // unsupported/unknown frame format
+         return false; // unsupported/unknown frame format
       }
-      return rgb;
+      return true;
    }
 }
 
 bool IsDisplayKnown(uint64_t mapping)
 {
-   std::lock_guard lock(deviceStatesMutex);
+   std::lock_guard lock(displayStateMutex);
    return displayGetters.find(mapping) != displayGetters.end();
 }
 
-// Looks up the display registered under `mapping` (the same CtlResId.id sent to the client as
-// the display node's "mapping" field) and returns its current frame as a top-down RGB24 buffer.
-// Returns an empty vector if the mapping is unknown, the source has no frame yet, or the frame
-// format isn't supported.
-std::vector<uint8_t> GetDisplayFrameRGB(uint64_t mapping, uint32_t& width, uint32_t& height, uint32_t& frameId)
+// Looks up the display registered under `mapping` (the same CtlResId.id sent to the client as the display
+// node's "mapping" field) and writes its current frame into `rgb`, as described by ConvertFrameToRgb24.
+// `lastFrameId` is the id of the frame the caller already has, or nullptr if it has none.
+// Returns false, leaving `rgb` untouched, if the mapping is unknown, the source has no frame yet, the frame
+// is the one the caller already has, or the frame format isn't supported
+bool GetDisplayFrameRGB(uint64_t mapping, const uint32_t* lastFrameId, size_t headerSize, std::vector<uint8_t>& rgb, uint32_t& width, uint32_t& height, uint32_t& frameId)
 {
    DisplayProvider provider;
    {
-      std::lock_guard lock(deviceStatesMutex);
+      std::lock_guard lock(displayStateMutex);
       auto it = displayGetters.find(mapping);
       if (it == displayGetters.end())
-         return { };
+         return false;
       provider = it->second;
    }
 
    if (!provider.GetRenderFrame || provider.width == 0 || provider.height == 0)
-      return { };
+      return false;
 
    const DisplayFrame frame = provider.GetRenderFrame(provider.id);
    if (!frame.frame)
-      return { };
+      return false;
+
+   // Displays stay unchanged for long stretches, so drop out before converting anything
+   if (lastFrameId && (frame.frameId == *lastFrameId))
+      return false;
 
    width = provider.width;
    height = provider.height;
    frameId = frame.frameId;
-   return ConvertFrameToRgb24(provider.width, provider.height, provider.frameFormat, frame.frame);
+   return ConvertFrameToRgb24(provider.width, provider.height, provider.frameFormat, frame.frame, headerSize, rgb);
 }
 
 void OnSrcChanged(const unsigned int eventId, void* userData, void* msgData) { UpdateTreeCache(); }
@@ -414,10 +382,12 @@ MSGPI_EXPORT void MSGPIAPI InspectorPluginLoad(const uint32_t sessionId, const M
    msgApi->BroadcastMsg(endpointId, getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API), &vpxApi);
 
    msgApi->SubscribeMsg(endpointId, onControllersChangedId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_CONTROLLERS_ON_CHG_MSG), OnSrcChanged, nullptr);
-   msgApi->SubscribeMsg(endpointId, onStateSrcChgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_STATE_ON_SRC_CHG_MSG), OnSrcChanged, nullptr);
    msgApi->SubscribeMsg(endpointId, onDisplaySrcChgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_ON_SRC_CHG_MSG), OnSrcChanged, nullptr);
    msgApi->SubscribeMsg(endpointId, onSegSrcChgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_ON_SRC_CHG_MSG), OnSrcChanged, nullptr);
    msgApi->RegisterSetting(endpointId, &portSetting);
+
+   stateSources = std::make_unique<PinballPlugin::Controller::CtrlItemConsumer<StateSrcId>>(
+      msgApi, endpointId, CTLPI_STATE_GET_SRC_MSG, CTLPI_STATE_ON_SRC_CHG_MSG, nullptr, nullptr, []() { UpdateTreeCache(); });
 
    std::filesystem::path path;
 #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__)
@@ -444,14 +414,14 @@ MSGPI_EXPORT void MSGPIAPI InspectorPluginUnload()
       webServer.reset();
    }
 
+   stateSources = nullptr;
+
    msgApi->UnsubscribeMsg(onControllersChangedId, OnSrcChanged, nullptr);
-   msgApi->UnsubscribeMsg(onStateSrcChgId, OnSrcChanged, nullptr);
    msgApi->UnsubscribeMsg(onDisplaySrcChgId, OnSrcChanged, nullptr);
    msgApi->UnsubscribeMsg(onSegSrcChgId, OnSrcChanged, nullptr);
 
    msgApi->ReleaseMsgID(getVpxApiId);
    msgApi->ReleaseMsgID(onControllersChangedId);
-   msgApi->ReleaseMsgID(onStateSrcChgId);
    msgApi->ReleaseMsgID(onDisplaySrcChgId);
    msgApi->ReleaseMsgID(onSegSrcChgId);
 

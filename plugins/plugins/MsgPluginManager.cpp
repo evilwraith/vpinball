@@ -266,8 +266,15 @@ void MsgPluginManager::RunOnMainThread(const uint32_t endpointId, const double d
 #endif
       // FIXME block cleanly until processed
       lock.unlock();
-      while (!pm.m_timers.empty())
+      for (;;)
+      {
+         {
+            const std::lock_guard waitLock(pm.m_timerListMutex);
+            if (pm.m_timers.empty())
+               break;
+         }
          std::this_thread::sleep_for(std::chrono::nanoseconds(100));
+      }
    }
    else
    {
@@ -313,23 +320,33 @@ void MsgPluginManager::FlushPendingCallbacks(const uint32_t endpointId)
 void MsgPluginManager::ProcessAsyncCallbacks()
 {
    AssertAPIThread();
+   // Collect timers to process (under mutex) eventually returning
+   std::unique_lock lock(m_timerListMutex);
    if (m_timers.empty())
       return;
    std::list<TimerEntry> timers;
+   const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+   for (auto it = m_timers.begin(); it != m_timers.end(); ++it)
+   {
+      if (it->time > now)
+         break;
+      timers.push_back(*it);
+   }
+   lock.unlock();
+   // Release lock before calling callbacks to avoid deadlock
+   for (const auto& it : timers)
+      it.callback(it.userData);
+   // Remove only after timer have been fired
+   if (!timers.empty())
    {
       const std::lock_guard lock(m_timerListMutex);
-      const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
       for (auto it = m_timers.begin(); it != m_timers.end();)
       {
          if (it->time > now)
             break;
-         timers.push_back(*it);
          it = m_timers.erase(it);
       }
    }
-   // Release lock before calling callbacks to avoid deadlock
-   for (const auto& it : timers)
-      it.callback(it.userData);
 }
 
 
@@ -536,6 +553,7 @@ void MsgPlugin::Unload()
       return;
    }
    m_unloadPlugin();
+   m_msgAPI->FlushPendingCallbacks(m_endpointId);
    if (m_loader)
    {
       m_loader->Unlink(m_module);

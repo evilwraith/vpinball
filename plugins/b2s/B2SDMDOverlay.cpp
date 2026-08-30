@@ -25,7 +25,7 @@ MSGPI_INT_VAL_SETTING(backglassDMDYProp, "BackglassDMDY", "Backglass DMD Y posit
 MSGPI_INT_VAL_SETTING(backglassDMDWProp, "BackglassDMDW", "Backglass DMD width", "DMD overlay width", true, 0, 0xFFFF, 0);
 MSGPI_INT_VAL_SETTING(backglassDMDHProp, "BackglassDMDH", "Backglass DMD height", "DMD overlay height", true, 0, 0xFFFF, 0);
 
-B2SDMDOverlay::B2SDMDOverlay(ResURIResolver& resURIResolver, VPXTexture& dmdTex, VPXTexture backImage)
+B2SDMDOverlay::B2SDMDOverlay(PinballPlugin::ResURIResolver& resURIResolver, VPXTexture& dmdTex, VPXTexture backImage)
    : m_resURIResolver(resURIResolver)
    , m_dmdTex(dmdTex)
    , m_backImage(backImage)
@@ -101,7 +101,7 @@ void B2SDMDOverlay::Render(VPXRenderContext2D* ctx)
    if (!m_enable)
       return;
 
-   ResURIResolver::DisplayState dmd = m_resURIResolver.GetDisplayState("ctrl://default/display"s);
+   PinballPlugin::ResURIResolver::DisplayState dmd = m_resURIResolver.GetDmdDisplayState("ctrl://default/display"s);
    if (dmd.state.frame == nullptr)
       return;
 
@@ -120,12 +120,19 @@ void B2SDMDOverlay::Render(VPXRenderContext2D* ctx)
    if (m_frame.z == 0 || m_frame.w == 0)
       return;
 
-   switch (dmd.source->frameFormat)
+   // The texture is shared with the other overlay, hence the null test: it may still have to be created here
+   if (!m_hasUploadedFrame || (m_dmdTex == nullptr) || (dmd.state.frameId != m_uploadedFrameId) || (*dmd.source != m_uploadedSrc))
    {
-   case CTLPI_DISPLAY_FORMAT_LUM32F: UpdateTexture(&m_dmdTex, dmd.source->width, dmd.source->height, VPXTextureFormat::VPXTEXFMT_BW32F, dmd.state.frame); break;
-   case CTLPI_DISPLAY_FORMAT_SRGB888: UpdateTexture(&m_dmdTex, dmd.source->width, dmd.source->height, VPXTextureFormat::VPXTEXFMT_sRGB8, dmd.state.frame); break;
-   case CTLPI_DISPLAY_FORMAT_SRGB565: UpdateTexture(&m_dmdTex, dmd.source->width, dmd.source->height, VPXTextureFormat::VPXTEXFMT_sRGB565, dmd.state.frame); break;
-   default: return;
+      switch (dmd.source->frameFormat)
+      {
+      case CTLPI_DISPLAY_FORMAT_LUM32F:  UpdateTexture(&m_dmdTex, dmd.source->width, dmd.source->height, VPXTextureFormat::VPXTEXFMT_BW32F, dmd.state.frame); break;
+      case CTLPI_DISPLAY_FORMAT_SRGB888: UpdateTexture(&m_dmdTex, dmd.source->width, dmd.source->height, VPXTextureFormat::VPXTEXFMT_sRGB8, dmd.state.frame); break;
+      case CTLPI_DISPLAY_FORMAT_SRGB565: UpdateTexture(&m_dmdTex, dmd.source->width, dmd.source->height, VPXTextureFormat::VPXTEXFMT_sRGB565, dmd.state.frame); break;
+      default: return;
+      }
+      m_uploadedSrc = *dmd.source;
+      m_uploadedFrameId = dmd.state.frameId;
+      m_hasUploadedFrame = true;
    }
 
    vec4 glassArea(0.f, 0.f, 0.f, 0.f);

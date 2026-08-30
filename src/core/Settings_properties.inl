@@ -33,7 +33,6 @@ PropIntDyn(Player, PlayfieldColorDepth, "Color Depth"s, "Fullscreen display mode
 PropEnumDyn(Backglass, BackglassOutput, "Output Mode"s, "Select between disabled, floating, or embedded in another window mode"s, int /* OutputMode */, 0 /* OM_DISABLED */, "Disabled"s,
    "Floating"s, "Embedded in playfield"s);
 PropStringDyn(Backglass, BackglassDisplay, "Display"s, "Display used for the main Backglass window"s, ""s);
-PropEnumDyn(Backglass, BackglassRotation, "Rotation"s, "Rotate this window's output, for a physically rotated panel"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 PropFloatSteppedDyn(Backglass, BackglassScale, "Scale"s, "Scale this window's output about its centre (1 = fill the display)"s, 0.05f, 1.0f, 0.01f, 1.0f);
 PropIntDyn(Backglass, BackglassOffsetX, "Horizontal Offset"s, "Shift this window's output horizontally, in display pixels"s, -16384, 16384, 0);
 PropIntDyn(Backglass, BackglassOffsetY, "Vertical Offset"s, "Shift this window's output vertically, in display pixels"s, -16384, 16384, 0);
@@ -51,11 +50,11 @@ PropIntDyn(Backglass, BackglassFSWidth, "Width"s, "Fullscreen display mode width
 PropIntDyn(Backglass, BackglassFSHeight, "Height"s, "Fullscreen display mode height"s, 0, 16384, 16384);
 PropFloatDyn(Backglass, BackglassRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
 PropIntDyn(Backglass, BackglassColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
+PropEnumDyn(Backglass, BackglassRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 // ScoreView Window
 PropEnumDyn(ScoreView, ScoreViewOutput, "Output Mode"s, "Select between disabled, floating, or embedded in another window mode"s, int /* OutputMode */, 0 /* OM_DISABLED */, "Disabled"s,
    "Floating"s, "Embedded in playfield"s);
 PropStringDyn(ScoreView, ScoreViewDisplay, "Display"s, "Display used for the main ScoreView window"s, ""s);
-PropEnumDyn(ScoreView, ScoreViewRotation, "Rotation"s, "Rotate this window's output, for a physically rotated panel"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 PropFloatSteppedDyn(ScoreView, ScoreViewScale, "Scale"s, "Scale this window's output about its centre (1 = fill the display)"s, 0.05f, 1.0f, 0.01f, 1.0f);
 PropIntDyn(ScoreView, ScoreViewOffsetX, "Horizontal Offset"s, "Shift this window's output horizontally, in display pixels"s, -16384, 16384, 0);
 PropIntDyn(ScoreView, ScoreViewOffsetY, "Vertical Offset"s, "Shift this window's output vertically, in display pixels"s, -16384, 16384, 0);
@@ -73,11 +72,11 @@ PropIntDyn(ScoreView, ScoreViewFSWidth, "Width"s, "Fullscreen display mode width
 PropIntDyn(ScoreView, ScoreViewFSHeight, "Height"s, "Fullscreen display mode height"s, 0, 16384, 16384);
 PropFloatDyn(ScoreView, ScoreViewRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
 PropIntDyn(ScoreView, ScoreViewColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
+PropEnumDyn(ScoreView, ScoreViewRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 // Topper Window
 PropEnumDyn(Topper, TopperOutput, "Output Mode"s, "Select between disabled, floating, or embedded in another window mode"s, int /* OutputMode */, 0 /* OM_DISABLED */, "Disabled"s, "Floating"s,
    "Embedded in playfield"s);
 PropStringDyn(Topper, TopperDisplay, "Display"s, "Display used for the Topper window"s, ""s);
-PropEnumDyn(Topper, TopperRotation, "Rotation"s, "Rotate this window's output, for a physically rotated panel"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 PropFloatSteppedDyn(Topper, TopperScale, "Scale"s, "Scale this window's output about its centre (1 = fill the display)"s, 0.05f, 1.0f, 0.01f, 1.0f);
 PropIntDyn(Topper, TopperOffsetX, "Horizontal Offset"s, "Shift this window's output horizontally, in display pixels"s, -16384, 16384, 0);
 PropIntDyn(Topper, TopperOffsetY, "Vertical Offset"s, "Shift this window's output vertically, in display pixels"s, -16384, 16384, 0);
@@ -94,6 +93,7 @@ PropIntDyn(Topper, TopperFSWidth, "Width"s, "Fullscreen display mode width for t
 PropIntDyn(Topper, TopperFSHeight, "Height"s, "Fullscreen display mode height for the Topper window"s, 0, 16384, 16384);
 PropFloatDyn(Topper, TopperRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
 PropIntDyn(Topper, TopperColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
+PropEnumDyn(Topper, TopperRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 // VR Preview Window
 PropStringDyn(PlayerVR, PreviewDisplay, "Display"s, "Display used for the VR Preview window"s, ""s);
 #ifdef ENABLE_BGFX
@@ -116,8 +116,6 @@ PropArray(Window, Display, string, String, String, m_propPlayer_PlayfieldDisplay
 // Output rotation, for panels mounted rotated relative to their content. The playfield and the VR
 // preview have no entry: the playfield already has the table viewport rotations, and VR does not
 // apply. Values are indices into the enum above (0/90/180/270), not degrees.
-PropArray(Window, Rotation, int, Enum, Int, m_propInvalid, m_propBackglass_BackglassRotation, m_propScoreView_ScoreViewRotation,
-   m_propTopper_TopperRotation, m_propInvalid);
 // Live output adjustment, ported from the 10.8.0 fork's DMD window model (<prefix>AdjustScale /
 // AdjustOffsetX / AdjustOffsetY). Deliberately NOT width/height: on KMSDRM a window is the panel and
 // SDL cannot resize one, so a relative scale about the centre plus a pixel offset is the only thing
@@ -144,6 +142,8 @@ PropArray(Window, FSRefreshRate, float, Float, Float, m_propPlayer_PlayfieldRefr
    m_propTopper_TopperRefreshRate, m_propPlayerVR_PreviewRefreshRate);
 PropArray(Window, FSColorDepth, int, Int, Int, m_propPlayer_PlayfieldColorDepth, m_propBackglass_BackglassColorDepth, m_propScoreView_ScoreViewColorDepth, m_propTopper_TopperColorDepth,
    m_propPlayerVR_PreviewColorDepth);
+// Only defined for the ancillary windows: the playfield has its own rotation, as part of its view setup
+PropArray(Window, Rotation, int, Enum, Int, m_propInvalid, m_propBackglass_BackglassRotation, m_propScoreView_ScoreViewRotation, m_propTopper_TopperRotation, m_propInvalid);
 
 // Graphics synchronisation and latency reduction
 PropEnum(Player, SyncMode, "Synchronization"s,
