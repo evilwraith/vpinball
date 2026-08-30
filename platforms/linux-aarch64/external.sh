@@ -201,10 +201,13 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
    # fails with EGL_BAD_PARAMETER (0x300C) and BGFX aborts: "Could not set API! error: 12300".
    # bgfx.cmake's BGFX_OPENGL[ES]_VERSION only set MIN_VERSION, they do not disable a renderer, so
    # override the config defines directly (src/config.h guards them with #ifndef).
+   # BGFX_WITH_WAYLAND defaults ON on Linux since bgfx.cmake 1.157 and hard-links wayland-egl,
+   # which the KMS-only cabinets do not ship.
    cmake -S. \
       -DBGFX_LIBRARY_TYPE=SHARED \
       -DBGFX_BUILD_TOOLS=OFF \
       -DBGFX_BUILD_EXAMPLES=OFF \
+      -DBGFX_WITH_WAYLAND=OFF \
       -DBGFX_CONFIG_MULTITHREADED=ON \
       -DBGFX_CONFIG_MAX_FRAME_BUFFERS=256 \
       -DCMAKE_C_FLAGS="-DBGFX_CONFIG_RENDERER_OPENGL=0 -DBGFX_CONFIG_RENDERER_OPENGLES=32" \
