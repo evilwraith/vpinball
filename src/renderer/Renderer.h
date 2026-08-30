@@ -250,6 +250,9 @@ private:
    void RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput& output, RenderTarget* embedRT, const vector<AncillaryRendererDef>& ancillaryWndRenderers);
    std::unique_ptr<RenderTarget> m_ancillaryWndHdrRT[VPXWindowId::VPXWINDOW_Topper + 1];
    bool m_ancillaryWndRendered[VPXWindowId::VPXWINDOW_Topper + 1] = {}; // Whether a renderer claimed the window on the last frame
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   uint64_t m_ancillaryWndNextRenderUs[VPXWindowId::VPXWINDOW_Topper + 1] = {}; // Standalone/AncillaryMaxFPS schedule, 0 = render on next opportunity
+#endif
    int m_ancillaryWndRotation[VPXWindowId::VPXWINDOW_Topper + 1] = {}; // Live rotation of the window content, in clockwise degrees
    struct AncillaryRenderSetup
    {

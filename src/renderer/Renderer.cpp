@@ -3429,6 +3429,30 @@ VPXRenderContext2D& Renderer::GetAncillaryRenderContext(VPXWindowId window, floa
 
 void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput& output, RenderTarget* embedRT, const vector<AncillaryRendererDef>& ancillaryWndRenderers)
 {
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   // Standalone/AncillaryMaxFPS: skip re-rendering a floating window that is not due yet. Nothing
+   // is drawn or cleared for it, so BGFX never touches its swap chain this frame and the KMS
+   // presenter's producer-starvation path keeps the previous buffer on scanout untouched. Floating
+   // windows only: an embedded region lives inside the playfield back buffer, which is fully
+   // redrawn every frame, so skipping it would leave the region unpainted. Bypassed while that
+   // window's display settings page is open, so rotation/scale edits get live feedback.
+   if (output.GetMode() == VPX::RenderOutput::OM_WINDOW
+      && !g_pplayer->m_liveUI->m_inGameUI.IsOpened(s_displaySettingsPages[window]))
+   {
+      const int maxFps = m_table->m_settings.GetStandalone_AncillaryMaxFPS();
+      if (maxFps > 0)
+      {
+         const uint64_t now = usec();
+         if (now < m_ancillaryWndNextRenderUs[window])
+            return;
+         // Accumulator schedule, so a 30 Hz cap on a 60 Hz frame loop renders exactly every second
+         // frame instead of beating against it; after a stall, fall back to one interval from now.
+         const uint64_t interval = 1000000ull / static_cast<uint64_t>(maxFps);
+         const uint64_t aligned = m_ancillaryWndNextRenderUs[window] + interval;
+         m_ancillaryWndNextRenderUs[window] = aligned > now ? aligned : now + interval;
+      }
+   }
+#endif
    bool isOutputLinear;
    int m_outputX, m_outputY, m_outputW, m_outputH;
    RenderDevice* const rd = m_renderDevice;

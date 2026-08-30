@@ -1415,6 +1415,16 @@ PropBool(Standalone, 4kpBgfxMultithreaded, "BGFX multithreaded"s,
 // comparison needs no config difference.
 PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,
    "Log frame rate and a GPU time breakdown per render pass every 5 seconds. RK3588 only."s, false);
+// 4kp/HDP only. Upstream re-renders every floating ancillary window (backglass, score view,
+// topper) at panel resolution every playfield frame. On the HDP that extra GPU work pushed TAF
+// from 16.1 ms to 17.5 ms per frame -- across the 16.7 ms vblank budget, so the vblank-latched
+// present halved to a hard 30 fps (backport/1081-frame-pacing-plan.md, HDP measurement). Real
+// DMDs update at ~15-30 Hz and backglasses are mostly static, so re-rendering them at 60 buys
+// nothing. When a window is skipped, nothing is drawn or swapped for it and the KMS presenter's
+// producer-starvation path keeps the previous buffer on scanout for free. 0 renders every frame.
+PropInt(Standalone, AncillaryMaxFPS, "Ancillary window max FPS"s,
+   "Cap how often the backglass, score view and topper windows re-render. The last rendered frame "
+   "stays on screen between updates. 0 = every playfield frame. RK3588 only."s, 0, 120, 30);
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 // 4kp/HDP only. Render the playfield below the panel's native resolution and let the display
 // controller (RK3588 VOP2) upscale it at scanout. That removes a full-resolution GPU pass and stops
