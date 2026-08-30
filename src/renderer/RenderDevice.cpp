@@ -2794,7 +2794,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
    // times every view every frame, so that is at most a frame or two stale; with the round-robin
    // patch a view is re-timed only every N frames and the same result is published in between.
    // gpuFrameNum identifies the frame a result came from, so use it to count each result once.
-   struct PassTime { double ms; uint32_t samples; uint32_t lastFrameNum; };
+   struct PassTime { double ms; uint32_t samples; uint32_t lastFrameNum; double cpuMs; uint32_t cpuSamples; };
    static std::map<std::string, PassTime> s_passes;
    static uint64_t s_drawSum = 0, s_primSum = 0, s_viewSum = 0;
    static int32_t s_transientVb = 0, s_transientIb = 0;
@@ -2810,9 +2810,9 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_gpuMsSum += toMs * double(stats->gpuTimeEnd - stats->gpuTimeBegin);
       // Splits the submit phase: how much of it is the render thread issuing GL calls, and how much
       // is either thread waiting on the other. Whatever is left is the GPU.
+      const double toCpuMs = stats->cpuTimerFreq > 0 ? 1000.0 / double(stats->cpuTimerFreq) : 0.0;
       if (stats->cpuTimerFreq > 0)
       {
-         const double toCpuMs = 1000.0 / double(stats->cpuTimerFreq);
          s_renderCpuMs  += toCpuMs * double(stats->cpuTimeEnd - stats->cpuTimeBegin);
          s_waitRenderMs += toCpuMs * double(stats->waitRender);
          s_waitSubmitMs += toCpuMs * double(stats->waitSubmit);
@@ -2828,6 +2828,11 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       {
          const bgfx::ViewStats& vs = stats->viewStats[i];
          PassTime& pt = s_passes[vs.name[0] ? FoldPassName(vs.name) : ("view " + std::to_string(vs.view))];
+         // CPU encode time of the view on the render thread, every frame (unlike the round-robin
+         // GPU sample below). This is what attributes a driver stall -- e.g. a glBufferSubData
+         // syncing on a GPU-busy buffer -- to the pass whose encode blocks.
+         pt.cpuMs += toCpuMs * double(vs.cpuTimeEnd - vs.cpuTimeBegin);
+         ++pt.cpuSamples;
          if (vs.gpuFrameNum == pt.lastFrameNum)
             continue; // already counted this result
          pt.lastFrameNum = vs.gpuFrameNum;
@@ -2914,9 +2919,10 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          if (pt.samples == 0)
             continue; // no fresh result for this pass in this window
          const double perPass = pt.ms / double(pt.samples);
-         if (perPass >= 0.005) // below this it is noise, and the list gets long
-            PLOGI.printf("[4kpDebug][gpu_timers]   %-40s %6.2f ms (%4.1f%% of gpu, n=%u)", name.c_str(), perPass,
-               gpuMs > 0.0 ? 100.0 * perPass / gpuMs : 0.0, pt.samples);
+         const double perPassCpu = pt.cpuSamples > 0 ? pt.cpuMs / double(pt.cpuSamples) : 0.0;
+         if (perPass >= 0.005 || perPassCpu >= 0.5) // below this it is noise, and the list gets long
+            PLOGI.printf("[4kpDebug][gpu_timers]   %-40s %6.2f ms (%4.1f%% of gpu, n=%u) | cpu %.2f ms", name.c_str(), perPass,
+               gpuMs > 0.0 ? 100.0 * perPass / gpuMs : 0.0, pt.samples, perPassCpu);
       }
 
       s_windowStartUs = nowUs;
@@ -2928,6 +2934,8 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       {
          pt.ms = 0.0;
          pt.samples = 0; // keep lastFrameNum: the result it refers to has already been counted
+         pt.cpuMs = 0.0;
+         pt.cpuSamples = 0;
       }
       s_drawSum = s_primSum = s_viewSum = 0;
       s_renderCpuMs = s_waitRenderMs = s_waitSubmitMs = 0.0;
