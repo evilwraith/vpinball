@@ -199,7 +199,8 @@ public:
    // A render target that DRM scans out directly has the opposite vertical origin to a normal GL
    // framebuffer. Fullscreen quads and LiveUI check these to render right-way-up into it.
    bool IsScanoutRenderTarget(const class RenderTarget* rt) const;
-   bool IsCurrentPassScanout() const;
+   bool IsCurrentPassScanout() const; // pass-BUILD-time check (m_currentPass)
+   bool m_executingScanoutPass = false; // pass-EXECUTE-time flag, set by RenderTarget::Activate
    #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats

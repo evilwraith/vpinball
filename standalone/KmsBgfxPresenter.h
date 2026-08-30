@@ -342,9 +342,13 @@ public:
 
    void ProbeOwnedScanout()
    {
-      if (m_ownedScanoutProbed || !m_ready || m_prevBo == nullptr)
+      // A few retries, not one shot: a probe can fail for transient reasons (the latched-GL-error
+      // case was fixed at the source in ScanoutSlots::Init, but the class of failure remains), and
+      // a window that never probes never gets owned -- which silently keeps eglSwapBuffers
+      // serialising every window's frame.
+      if (m_ownedSlots.IsReady() || m_ownedScanoutProbeAttempts >= 3 || !m_ready || m_prevBo == nullptr)
          return;
-      m_ownedScanoutProbed = true;
+      ++m_ownedScanoutProbeAttempts;
 
       const uint32_t w = gbm_bo_get_width(m_prevBo);
       const uint32_t h = gbm_bo_get_height(m_prevBo);
@@ -679,7 +683,7 @@ private:
    uint32_t m_crtcId = 0;
    struct gbm_surface* m_surface = nullptr;
    ScanoutSlots m_ownedSlots; // held for the process lifetime; see ProbeOwnedScanout
-   bool m_ownedScanoutProbed = false;
+   int m_ownedScanoutProbeAttempts = 0;
    struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
    struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
    static constexpr int kMaxTrackedBos = 8;

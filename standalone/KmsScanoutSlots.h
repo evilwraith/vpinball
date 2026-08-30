@@ -100,6 +100,12 @@ public:
       // differently from how it was found is state corruption from BGFX's point of view. Binding 0
       // is not "putting it back", it is clobbering. Restore exactly what was there.
       const GlBindings saved = SaveBindings();
+      // GL errors latch until read, and this context has been running BGFX's command stream for
+      // many frames by the time the probe runs. A stale error would be misread below as a failure
+      // of OUR import (seen live: the playfield probe failing with GL_INVALID_OPERATION that the
+      // identical backglass import did not produce). Drain the queue so every check below sees
+      // only its own result.
+      for (int drained = 0; drained < 16 && s_glGetError() != GL_NO_ERROR; ++drained) { }
       PLOGI << "[4kpDebug][owned_scanout] step: GL entry points resolved";
 
       auto createImage = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");

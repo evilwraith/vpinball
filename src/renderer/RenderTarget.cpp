@@ -774,6 +774,9 @@ void RenderTarget::Activate(const int layer)
       m_pendingClear = false;
       bgfx::setViewClear(m_rd->m_activeViewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
    }
+   // Execute-time counterpart of IsCurrentPassScanout(): commands executing after this Activate
+   // draw into a scanned-out buffer and must not cull the flipped winding (see RenderCommand).
+   m_rd->m_executingScanoutPass = m_rd->IsScanoutRenderTarget(this);
    #endif
    m_needResolve = true;
 

@@ -115,6 +115,14 @@ void RenderCommand::Execute(const int nInstances, const bool log)
    case RC_DRAW_QUAD_PNT:
    case RC_DRAW_MESH:
    {
+      #if defined(ENABLE_BGFX) && defined(__RK3588__)
+      // A directly scanned-out target is rendered right-way-up by flipping the projection
+      // (see IsScanoutRenderTarget), which inverts triangle winding. Only 2D composition ever
+      // targets a scanout buffer (final playfield quads, LiveUI, ancillary windows), where culling
+      // serves no purpose, so disable it rather than asking every 2D draw site to know about it.
+      if (m_rd->m_executingScanoutPass)
+         m_renderState.SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
+      #endif
       m_renderState.Apply(m_rd);
       m_shaderState->SetInt(ShaderUniform::layer, RenderTarget::GetCurrentRenderLayer() < 0 ? 0 : RenderTarget::GetCurrentRenderLayer());
       m_shader->m_state->CopyTo(false, m_shaderState);
