@@ -205,6 +205,8 @@ public:
    #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
+   static uint64_t s_rtRenderUs, s_rtPresentUs, s_rtFrames; // present-thread phase split (renderFrame vs PresentKmsWindows), reset by LogFrameStats
+   static uint64_t s_drainWaitUs, s_auxBusySkips; // playfield drain wait inside PresentKmsWindows; aux commits deferred as Busy
    static uint64_t s_preSubmitUs;   // render-loop work before the frame reaches BGFX
    uint64_t m_loopTopUs = 0;        // top of the current render-loop iteration
    // Dynamic buffer traffic. Writing to a buffer the GPU may still be reading is what forces a

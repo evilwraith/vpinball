@@ -353,13 +353,23 @@ void RenderDevice::BGFXRenderThread(RenderDevice* rd)
    // blocks forever -- which is exactly what hung on close.
    for (;;)
    {
+      #ifdef __RK3588__
+      const uint64_t t0 = usec();
+      #endif
       const bgfx::RenderFrame::Enum r = bgfx::renderFrame(16);
       if (r == bgfx::RenderFrame::Exiting)
          break;
       #ifdef __RK3588__
       // Not during teardown: the presenters and windows are being freed on the other thread.
       if (r == bgfx::RenderFrame::Render && rd->m_renderDeviceAlive)
+      {
+         const uint64_t t1 = usec();
          rd->PresentKmsWindows();
+         const uint64_t t2 = usec();
+         s_rtRenderUs += t1 - t0;
+         s_rtPresentUs += t2 - t1;
+         s_rtFrames++;
+      }
       #endif
    }
 }
@@ -2311,6 +2321,11 @@ void RenderDevice::ResetActiveView()
 #ifdef __RK3588__
 uint64_t RenderDevice::s_preSubmitUs = 0;
 uint64_t RenderDevice::s_uploadUs = 0;
+uint64_t RenderDevice::s_rtRenderUs = 0;
+uint64_t RenderDevice::s_rtPresentUs = 0;
+uint64_t RenderDevice::s_rtFrames = 0;
+uint64_t RenderDevice::s_drainWaitUs = 0;
+uint64_t RenderDevice::s_auxBusySkips = 0;
 uint64_t RenderDevice::s_bgfxFrameUs = 0;
 uint32_t RenderDevice::s_dynVbUpdates = 0;
 uint32_t RenderDevice::s_dynIbUpdates = 0;
@@ -2584,6 +2599,17 @@ static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
 
 void RenderDevice::PresentKmsWindows()
 {
+   // With BGFX presentation skipped there is no eglSwapBuffers, and eglSwapBuffers was the only
+   // per-frame flush: without one the GPU may not start this frame's work until CommitFb's fence
+   // flush -- which sits AFTER the playfield drain, serialising GPU start behind the previous
+   // frame's latch. Flush here, at exactly the point the swap used to, so the GPU overlaps the
+   // drain wait.
+   if (m_ownedScanoutPresentSkipped)
+   {
+      static void (*s_glFlush)() = reinterpret_cast<void (*)()>(eglGetProcAddress("glFlush"));
+      if (s_glFlush != nullptr)
+         s_glFlush();
+   }
 
 
    for (size_t wndIdx = 0; wndIdx < m_outputWnd.size(); ++wndIdx)
@@ -2656,7 +2682,10 @@ void RenderDevice::PresentKmsWindows()
             // queued and is retried next frame; its previous buffer remains on scanout.
             if (wndIdx == 0)
             {
-               if (presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight()))
+               const uint64_t tDrain = usec();
+               const bool ok = presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight());
+               s_drainWaitUs += usec() - tDrain;
+               if (ok)
                {
                   own.slotQPop.store(pop + 1, std::memory_order_release);
                   continue;
@@ -2667,7 +2696,10 @@ void RenderDevice::PresentKmsWindows()
                const VPX::Kms::WindowPresenter::OwnedPresentResult r
                   = presenter.PresentOwnedFbIfIdle(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight());
                if (r == VPX::Kms::WindowPresenter::OwnedPresentResult::Busy)
+               {
+                  s_auxBusySkips++;
                   continue; // deferred, retry next frame
+               }
                if (r == VPX::Kms::WindowPresenter::OwnedPresentResult::Committed)
                {
                   own.slotQPop.store(pop + 1, std::memory_order_release);
@@ -2845,6 +2877,15 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
             g_pplayer->m_renderer->m_ancillaryWndRenders, g_pplayer->m_renderer->m_ancillaryWndSkips);
          g_pplayer->m_renderer->m_ancillaryWndRenders = 0;
          g_pplayer->m_renderer->m_ancillaryWndSkips = 0;
+      }
+      if (s_rtFrames > 0)
+      {
+         // The present thread's own split. renderFrame = GL issuing; present = the presenters,
+         // of which drain = the playfield's blocking wait for its previous flip to latch.
+         PLOGI.printf("[4kpDebug][gpu_timers]   present thread: renderFrame %.2f ms + present %.2f ms (of which playfield drain+commit %.2f) | aux busy-deferred %llu",
+            0.001 * double(s_rtRenderUs) / double(s_rtFrames), 0.001 * double(s_rtPresentUs) / double(s_rtFrames),
+            0.001 * double(s_drainWaitUs) / double(s_rtFrames), (unsigned long long)s_auxBusySkips);
+         s_rtRenderUs = s_rtPresentUs = s_rtFrames = s_drainWaitUs = s_auxBusySkips = 0;
       }
       // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
       // bgfx thread, so bgfx::frame() runs the backend inline and neither side ever blocks on the
