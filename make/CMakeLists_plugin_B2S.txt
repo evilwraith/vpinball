@@ -36,6 +36,12 @@ if(BUILD_SHARED)
       plugins/b2s
    )
 
+   if(NOT (PLATFORM STREQUAL "windows" OR PLATFORM STREQUAL "windows-mingw"))
+      target_compile_definitions(B2SPlugin PRIVATE
+         "__forceinline=__attribute__((always_inline)) inline"
+      )
+   endif()
+
    if(PLATFORM STREQUAL "windows" OR PLATFORM STREQUAL "windows-mingw")
       if(MSVC)
          set_target_properties(B2SPlugin PROPERTIES
@@ -110,6 +116,10 @@ if(BUILD_STATIC)
       ${CMAKE_SOURCE_DIR}/third-party/include
       plugins
       plugins/b2s
+   )
+
+   target_compile_definitions(B2SPlugin PRIVATE
+      "__forceinline=__attribute__((always_inline)) inline"
    )
 
    set_target_properties(B2SPlugin PROPERTIES
