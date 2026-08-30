@@ -444,6 +444,14 @@ void LiveUI::RenderUI()
    const float right = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.y : io.DisplaySize.x;
    const float bottom = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.x : io.DisplaySize.y;
    Matrix3D matView[2];
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   // A directly scanned-out target has the opposite vertical origin to a normal GL framebuffer,
+   // so flip the ortho projection to render the UI right-way-up in the buffer. Clipping is done in
+   // the shader against pre-projection UI coordinates (clip_plane below), so it needs no change.
+   if (m_rd->IsCurrentPassScanout())
+      matView[0] = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, 0.f, bottom, 0.f, 1.f);
+   else
+#endif
    matView[0] = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, bottom, 0.f, 0.f, 1.f);
    if (m_rd->m_nEyes == 2)
       matView[1] = matView[0];  

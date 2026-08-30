@@ -3299,6 +3299,16 @@ RenderTarget* Renderer::SetupAncillaryRenderTarget(
    matOutput._41 = -1.f + 2.f * static_cast<float>(outputX) / static_cast<float>(outputRT->GetWidth());
    matOutput._22 = -2.f * static_cast<float>(outputH) / static_cast<float>(outputRT->GetHeight());
    matOutput._42 = 1.f - 2.f * static_cast<float>(outputY) / static_cast<float>(outputRT->GetHeight());
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   // A directly scanned-out target (owned scanout) has the opposite vertical origin to a normal GL
+   // framebuffer; flip the vertical mapping so the window content is right-way-up in the buffer.
+   // Composes with the rotation below, which is applied before this matrix.
+   if (rd->IsScanoutRenderTarget(outputRT))
+   {
+      matOutput._22 = -matOutput._22;
+      matOutput._42 = -matOutput._42;
+   }
+#endif
 
    Matrix3D matWorldViewProj[2];
    // Rotated around the center of that square, the same way DrawImage rotates around its pivot

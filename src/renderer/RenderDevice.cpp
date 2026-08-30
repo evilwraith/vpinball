@@ -2323,6 +2323,11 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
    #ifdef __RK3588__
    const uint64_t tSubmitBegin = usec();
    s_preSubmitUs = (m_loopTopUs != 0 && tSubmitBegin > m_loopTopUs) ? tSubmitBegin - m_loopTopUs : 0;
+   // Owned scanout bookkeeping: passes for this frame are encoded by now, so the slot they
+   // rendered into can be handed to the present thread and the windows rotated onto their next
+   // buffers before bgfx::frame() kicks the render.
+   if (present)
+      UpdateOwnedScanout();
    #endif
    // Process pending texture upload/mipmap generation before flipping the frame
    for (auto it = m_pendingTextureUploads.cbegin(); it != m_pendingTextureUploads.cend();)
@@ -2370,6 +2375,194 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
 // Verified rather than assumed: getInternal() must hand back the same GL id we supplied, since
 // overrideInternal returning silently without taking effect would otherwise look identical to
 // success right up until the display showed the wrong buffer.
+// Defined by our bgfx patch (vpx-patches/bgfx-skip-present.patch).
+extern "C" void bgfx_set_skip_present(bool skip);
+
+void RenderDevice::DisableOwnedScanout(const char* why)  // NOLINT
+{
+   PLOGE << "[4kpDebug][owned_scanout] " << why << "; falling back to the EGL surface path";
+   bgfx_set_skip_present(false);
+   m_ownedScanoutPresentSkipped = false;
+   for (size_t i = 0; i < m_ownedScanout.size() && i < m_outputWnd.size(); ++i)
+   {
+      if (m_ownedScanout[i].active.load(std::memory_order_relaxed) && m_ownedScanout[i].originalBackBuffer != nullptr)
+         m_outputWnd[i]->SetBackBuffer(m_ownedScanout[i].originalBackBuffer, false);
+      m_ownedScanout[i].active.store(false, std::memory_order_release);
+      m_ownedScanout[i].disableRequested.store(false, std::memory_order_relaxed);
+      m_ownedScanout[i].bindStep = 3; // do not try again this session
+   }
+}
+
+// Give one window's scanout buffers to BGFX and point that window's back buffer at them.
+//
+// Two frames: bgfx defers texture creation to the next frame(), so overriding in the same frame is
+// dropped (returns 0) while the framebuffer still reports valid -- wrapping bgfx's own allocation.
+void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, VPX::Window* wnd)
+{
+   OwnedScanout& own = m_ownedScanout[idx];
+   const VPX::Kms::ScanoutSlots* const slotsPtr = own.slots.load(std::memory_order_acquire);
+   if (own.bindStep > 1 || slotsPtr == nullptr)
+      return;
+   const VPX::Kms::ScanoutSlots& slots = *slotsPtr;
+   if (!slots.IsReady())
+      return;
+
+   const uint16_t w = uint16_t(wnd->GetPixelWidth());
+   const uint16_t h = uint16_t(wnd->GetPixelHeight());
+
+   if (own.bindStep == 0)
+   {
+      for (int i = 0; i < slots.Count(); ++i)
+      {
+         own.tex[i] = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+         if (!bgfx::isValid(own.tex[i]))
+         {
+            PLOGE.printf("[4kpDebug][owned_scanout] window %zu slot %d: createTexture2D failed", idx, i);
+            own.bindStep = 2;
+            return;
+         }
+      }
+      own.bindStep = 1;
+      return;
+   }
+
+   own.bindStep = 2;
+   bool allValid = true;
+
+   for (int i = 0; i < slots.Count(); ++i)
+   {
+      const VPX::Kms::ScanoutSlots::Slot& slot = slots.GetSlot(i);
+      const uintptr_t bound = bgfx::overrideInternal(own.tex[i], uintptr_t(slot.texture));
+      const bool tookEffect = (bound == uintptr_t(slot.texture));
+
+      if (tookEffect)
+      {
+         // Only the playfield composites with depth; the ancillary panels are 2D and their existing
+         // back buffers carry no depth attachment either.
+         if (idx == 0)
+         {
+            const bgfx::TextureHandle depth = bgfx::createTexture2D(w, h, false, 1,
+               bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+            if (bgfx::isValid(depth))
+            {
+               bgfx::TextureHandle attachments[2] = { own.tex[i], depth };
+               own.fb[i] = bgfx::createFrameBuffer(2, attachments, false);
+            }
+         }
+         else
+         {
+            own.fb[i] = bgfx::createFrameBuffer(1, &own.tex[i], false);
+         }
+      }
+
+      if (!bgfx::isValid(own.fb[i]))
+         allValid = false;
+
+      PLOGI.printf("[4kpDebug][owned_scanout] window %zu slot %d: gl texture %u -> bgfx texture %u, override %s, framebuffer %s",
+         idx, i, slot.texture, own.tex[i].idx, tookEffect ? "MATCH" : "did not take",
+         bgfx::isValid(own.fb[i]) ? "valid" : "INVALID");
+   }
+
+   if (!allValid)
+   {
+      PLOGE.printf("[4kpDebug][owned_scanout] window %zu: a slot was unusable; staying on the EGL surface path", idx);
+      return;
+   }
+
+   for (int i = 0; i < slots.Count(); ++i)
+      own.rt[i] = new RenderTarget(this, SurfaceType::RT_DEFAULT, own.fb[i], own.tex[i], bgfx::TextureFormat::BGRA8,
+         BGFX_INVALID_HANDLE, idx == 0 ? bgfx::TextureFormat::D24S8 : bgfx::TextureFormat::Count,
+         "OwnedScanout" + std::to_string(idx) + '.' + std::to_string(i), wnd->GetPixelWidth(), wnd->GetPixelHeight(),
+         BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
+
+   own.originalBackBuffer = wnd->GetBackBuffer();
+   own.slot = 0;
+   own.rt[0]->RequestClear();
+   wnd->SetBackBuffer(own.rt[0], false);
+   own.active.store(true, std::memory_order_release);
+   PLOGI.printf("[4kpDebug][owned_scanout] window %zu redirected; cycling %d owned buffers", idx, slots.Count());
+}
+
+// bgfx API thread, once per frame after pass encoding and before bgfx::frame(): execute any
+// fallback the present thread requested, drive the two-step bind, hand rendered slots to the
+// present thread, and rotate each owned window onto its next buffer for the frame about to be
+// built. All bgfx object creation and back-buffer swapping lives here because the present thread
+// runs concurrently with pass encoding for the NEXT frame.
+void RenderDevice::UpdateOwnedScanout()
+{
+   for (size_t i = 0; i < m_outputWnd.size() && i < m_ownedScanout.size(); ++i)
+      if (m_ownedScanout[i].disableRequested.load(std::memory_order_acquire))
+      {
+         DisableOwnedScanout("present thread reported a commit failure");
+         return;
+      }
+
+   if (!g_pplayer || !g_pplayer->m_ptable || !g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout())
+      return;
+
+   for (size_t i = 0; i < m_outputWnd.size() && i < m_ownedScanout.size(); ++i)
+   {
+      OwnedScanout& own = m_ownedScanout[i];
+      if (!own.active.load(std::memory_order_relaxed))
+      {
+         BindOwnedScanoutToBgfx(i, m_outputWnd[i]);
+         continue;
+      }
+      // The pending-clear flag is armed when a slot is handed out and consumed by the first pass
+      // that targets it, so a still-armed flag means nothing rendered into this buffer this frame
+      // (AncillaryFrameDivider skipped the window): keep it for the next frame, hand nothing to
+      // the present thread, and it keeps scanning the last committed buffer.
+      RenderTarget* const cur = own.rt[own.slot];
+      if (cur == nullptr || cur->m_pendingClear)
+         continue;
+      const uint32_t push = own.slotQPush.load(std::memory_order_relaxed);
+      if (push - own.slotQPop.load(std::memory_order_acquire) >= sizeof(own.slotQ))
+         continue; // present thread has stalled; do not wrap the ring
+      own.slotQ[push % sizeof(own.slotQ)] = uint8_t(own.slot);
+      own.slotQPush.store(push + 1, std::memory_order_release);
+      // Rotate to the next buffer for the frame about to be built, so rendering never lands in
+      // the one just handed to the display. The buffer we are about to draw into still holds the
+      // frame from three frames ago.
+      own.slot = (own.slot + 1) % VPX::Kms::kScanoutSlotCount;
+      own.rt[own.slot]->RequestClear();
+      m_outputWnd[i]->SetBackBuffer(own.rt[own.slot], false);
+   }
+
+   // Presentation can only be skipped once EVERY window is owned: eglSwapBuffers on any surface
+   // drains the whole context, so one window left on the EGL path re-serialises all of them --
+   // which is exactly what skipping the primary alone achieved, namely nothing.
+   if (!m_ownedScanoutPresentSkipped && !m_outputWnd.empty())
+   {
+      size_t active = 0;
+      for (size_t i = 0; i < m_outputWnd.size() && i < m_ownedScanout.size(); ++i)
+         if (m_ownedScanout[i].active.load(std::memory_order_relaxed))
+            ++active;
+      if (active == m_outputWnd.size())
+      {
+         m_ownedScanoutPresentSkipped = true;
+         bgfx_set_skip_present(true);
+         PLOGI.printf("[4kpDebug][owned_scanout] all %zu windows owned; BGFX presentation skipped entirely", active);
+      }
+   }
+}
+
+bool RenderDevice::IsScanoutRenderTarget(const RenderTarget* const rt) const
+{
+   if (rt == nullptr)
+      return false;
+   for (const OwnedScanout& own : m_ownedScanout)
+      if (own.active.load(std::memory_order_acquire))
+         for (const RenderTarget* const slotRt : own.rt)
+            if (slotRt == rt)
+               return true;
+   return false;
+}
+
+bool RenderDevice::IsCurrentPassScanout() const
+{
+   return m_currentPass != nullptr && IsScanoutRenderTarget(m_currentPass->m_rt);
+}
+
 static std::unordered_map<SDL_Window*, VPX::Kms::WindowPresenter> s_presenters;
 
 void RenderDevice::PresentKmsWindows()
@@ -2416,6 +2609,39 @@ void RenderDevice::PresentKmsWindows()
       else
       {
          presenter.SetAdjust(1.0f, 0, 0);
+      }
+
+      // Owned scanout, present-thread half: build the pool once the presenter has a live template
+      // buffer (EGL/GBM work needs the GL context, which lives on this thread) and publish it to
+      // the bgfx API thread, then commit whatever fully rendered slots that thread handed over.
+      // Any commit failure requests a fallback; the API thread performs the actual restore, since
+      // back buffers may only be swapped between frames.
+      if (wndIdx < m_ownedScanout.size())
+      {
+         OwnedScanout& own = m_ownedScanout[wndIdx];
+         if (g_pplayer && g_pplayer->m_ptable && g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout()
+            && own.slots.load(std::memory_order_relaxed) == nullptr)
+         {
+            presenter.ProbeOwnedScanout();
+            if (presenter.GetOwnedSlots().IsReady())
+               own.slots.store(&presenter.GetOwnedSlots(), std::memory_order_release);
+         }
+         if (own.active.load(std::memory_order_acquire))
+         {
+            const uint32_t pop = own.slotQPop.load(std::memory_order_relaxed);
+            if (pop == own.slotQPush.load(std::memory_order_acquire))
+               continue; // nothing newly rendered; the last committed buffer stays on scanout
+            const int slotIdx = own.slotQ[pop % sizeof(own.slotQ)];
+            const VPX::Kms::ScanoutSlots::Slot& slot = own.slots.load(std::memory_order_relaxed)->GetSlot(slotIdx);
+            if (presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight()))
+            {
+               own.slotQPop.store(pop + 1, std::memory_order_release);
+               continue;
+            }
+            own.disableRequested.store(true, std::memory_order_release);
+            // Fall through to the EGL present below until the API thread restores the back buffers;
+            // the surface holds a stale frame but stays correctly oriented.
+         }
       }
       presenter.Present();
    }
@@ -3114,7 +3340,22 @@ void RenderDevice::DrawTexturedQuad(Shader* shader, const Vertex3D_TexelOnly* ve
    assert(shader == m_FBShader || shader == m_stereoShader); // FrameBuffer/Stereo shaders are the only ones using Position/Texture vertex format
    ApplyRenderStates();
    RenderCommand* cmd = m_renderFrame->NewCommand();
-   cmd->SetDrawTexturedQuad(shader, vertices, isTransparent, depth);
+   const Vertex3D_TexelOnly* submittedVertices = vertices;
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   // A directly scanned-out target has the opposite vertical origin to a normal GL framebuffer.
+   // These quads are the only writers of the playfield output (tonemap, AA, sharpen, upscale,
+   // stereo), so flipping their texture V here renders the whole frame right-way-up in the buffer
+   // and no plane rotation is ever needed. Same mechanism as the 10.8.0 fork.
+   Vertex3D_TexelOnly flippedVertices[4];
+   if (IsCurrentPassScanout())
+   {
+      memcpy(flippedVertices, vertices, sizeof(flippedVertices));
+      for (Vertex3D_TexelOnly& vertex : flippedVertices)
+         vertex.tv = 1.0f - vertex.tv;
+      submittedVertices = flippedVertices;
+   }
+#endif
+   cmd->SetDrawTexturedQuad(shader, submittedVertices, isTransparent, depth);
    cmd->m_dependency = m_nextRenderCommandDependency;
    m_nextRenderCommandDependency = nullptr;
    m_currentPass->Submit(cmd);
@@ -3134,6 +3375,20 @@ void RenderDevice::DrawTexturedQuad(Shader* shader, const Vertex3D_NoTex2* verti
 void RenderDevice::DrawFullscreenTexturedQuad(Shader* shader)
 {
    assert(shader == m_FBShader || shader == m_stereoShader); // FrameBuffer/Stereo shaders are the only ones using Position/Texture vertex format
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   // See DrawTexturedQuad: render right-way-up into a directly scanned-out target.
+   if (IsCurrentPassScanout())
+   {
+      static constexpr Vertex3D_TexelOnly fullscreenFlippedVertices[4] = {
+         { 1.0f, 1.0f, 0.0f, 1.0f, 0.0f },
+         { -1.0f, 1.0f, 0.0f, 0.0f, 0.0f },
+         { 1.0f, -1.0f, 0.0f, 1.0f, 1.0f },
+         { -1.0f, -1.0f, 0.0f, 0.0f, 1.0f },
+      };
+      DrawTexturedQuad(shader, fullscreenFlippedVertices);
+      return;
+   }
+#endif
    static constexpr Vertex3Ds pos { 0.f, 0.f, 0.f };
    DrawMesh(shader, false, pos, 0.f, m_quadMeshBuffer, TRIANGLESTRIP, 0, 4);
 }

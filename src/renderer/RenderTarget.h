@@ -27,6 +27,10 @@ public:
    static int GetCurrentRenderLayer();
 
    bool IsBackBuffer() const { return m_is_back_buffer; }
+   #ifdef __RK3588__
+   void RequestClear() { m_pendingClear = true; } // see Activate(): rotating scanout buffers hold stale frames
+   bool m_pendingClear = false;
+   #endif
    std::shared_ptr<Sampler> GetColorSampler() const { return m_color_sampler; }
    void UpdateDepthSampler(bool insideBeginEnd);
    std::shared_ptr<Sampler> GetDepthSampler() const { return m_depth_sampler; }

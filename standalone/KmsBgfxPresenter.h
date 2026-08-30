@@ -42,6 +42,8 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include "KmsScanoutSlots.h"
+
 namespace VPX::Kms
 {
 
@@ -336,6 +338,55 @@ public:
    // Uses a live surface buffer as the template so the slots match what the display is already
    // accepting -- guessing the format or the modifier is the easiest way to get a pool that builds
    // and then fails at commit time.
+   const ScanoutSlots& GetOwnedSlots() const { return m_ownedSlots; }
+
+   void ProbeOwnedScanout()
+   {
+      if (m_ownedScanoutProbed || !m_ready || m_prevBo == nullptr)
+         return;
+      m_ownedScanoutProbed = true;
+
+      const uint32_t w = gbm_bo_get_width(m_prevBo);
+      const uint32_t h = gbm_bo_get_height(m_prevBo);
+      const uint32_t fmt = gbm_bo_get_format(m_prevBo);
+
+      // The first attempt segfaulted with no output at all, so the probe could not say which step
+      // it died on. Announce each step: the last line in the log then names the culprit.
+      PLOGI.printf("[4kpDebug][owned_scanout] probe start: %ux%u fourcc 0x%08x", w, h, fmt);
+
+      struct gbm_device* dev = gbm_bo_get_device(m_prevBo);
+      EGLDisplay dpy = eglGetCurrentDisplay();
+      PLOGI.printf("[4kpDebug][owned_scanout] gbm_device=%p egl_display=%p drm_fd=%d", (void*)dev, (void*)dpy, m_drmFd);
+
+      if (dev == nullptr || dpy == EGL_NO_DISPLAY)
+      {
+         PLOGE << "[4kpDebug][owned_scanout] probe aborted: no gbm device or no current EGL display on this thread";
+         return;
+      }
+
+      std::string err;
+      const bool ok = m_ownedSlots.Init(m_drmFd, dev, dpy, w, h, fmt, err);
+
+      if (ok)
+         PLOGI.printf("[4kpDebug][owned_scanout] pool ready: %d slots %ux%u fourcc 0x%08x -- imported to GL, framebuffer complete, registered with DRM",
+            m_ownedSlots.Count(), w, h, fmt);
+      else
+         PLOGE.printf("[4kpDebug][owned_scanout] pool FAILED: %s (%ux%u fourcc 0x%08x)", err.c_str(), w, h, fmt);
+   }
+
+   // Present a buffer we own rather than one the EGL surface handed us. No gbm_surface locking and
+   // no buffer release: the slots are ours for the process lifetime, so the only contract that
+   // still applies is one commit in flight per CRTC. Content is rendered right-way-up into the
+   // buffer (see RenderDevice::IsScanoutRenderTarget), so no plane rotation is involved -- nothing
+   // here touches CRTC state that could outlive the process.
+   bool PresentOwnedFb(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH)
+   {
+      if (!m_ready || fbId == 0)
+         return false;
+      DrainPendingFlip(); // Contract 3
+      return CommitFb(fbId, srcW, srcH);
+   }
+
    // The atomic commit itself, shared by the gbm_surface path and the owned-slot path so the four
    // hard contracts at the top of this file live in exactly one place. srcW/srcH describe the
    // BUFFER, which is not the mode whenever the buffer is deliberately smaller (BackBufferScale).
@@ -627,6 +678,8 @@ private:
    int m_drmFd = -1;
    uint32_t m_crtcId = 0;
    struct gbm_surface* m_surface = nullptr;
+   ScanoutSlots m_ownedSlots; // held for the process lifetime; see ProbeOwnedScanout
+   bool m_ownedScanoutProbed = false;
    struct gbm_bo* m_prevBo = nullptr;    // currently on screen (or awaiting latch)
    struct gbm_bo* m_retiredBo = nullptr; // replaced on screen; freed after the next latch
    static constexpr int kMaxTrackedBos = 8;

@@ -762,6 +762,19 @@ void RenderTarget::Activate(const int layer)
    // Either bind all layers for instanced rendering or the only requested one for normal rendering (one pass per layer)
    bgfx::setViewFrameBuffer(m_rd->m_activeViewId, (layer == -1 || m_nLayers == 1) ? m_framebuffer : m_framebuffer_layers[layer]);
    bgfx::setViewRect(m_rd->m_activeViewId, 0, 0, m_width, m_height);
+   #ifdef __RK3588__
+   // A rotating scanout buffer holds the frame from three frames ago, not the one just shown, so
+   // anything the frame does not overwrite reappears as a ghost -- which is what the ball and the
+   // flippers were leaving behind. Clear on the FIRST activation of each frame only: the output
+   // target is activated again later for the UI overlay, and clearing there would erase the frame.
+   // On a tile based GPU this is close to free, and cheaper than not doing it: a cleared attachment
+   // lets the driver skip loading the previous contents into tile memory.
+   if (m_pendingClear)
+   {
+      m_pendingClear = false;
+      bgfx::setViewClear(m_rd->m_activeViewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
+   }
+   #endif
    m_needResolve = true;
 
    #elif defined(ENABLE_OPENGL)

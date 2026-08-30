@@ -66,6 +66,10 @@ public:
    RenderState m_renderState;
 };
 
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+namespace VPX::Kms { class ScanoutSlots; }
+#endif
+
 class RenderDevice final
 {
 public:
@@ -154,6 +158,48 @@ public:
    void LogFrameStats(uint64_t submitUs, uint64_t presentUs); // periodic fps + frame phase split, Standalone/4kpGpuTimers
    static bool AreFrameStatsEnabled();
    #ifdef __RK3588__
+   #endif
+   #if defined(ENABLE_BGFX) && defined(__RK3588__)
+   // Owned scanout (Standalone/4kpOwnedScanout), one set per output window. Every window needs it
+   // or none benefits: an eglSwapBuffers on any surface drains the whole context, so leaving one
+   // window on the EGL path re-serialises the frame for all of them.
+   //
+   // Unlike the first (deleted) incarnation there is NO plane reflect: content is rendered
+   // right-way-up into the buffers via IsScanoutRenderTarget() -- fullscreen quads flip their V
+   // coordinates, LiveUI flips its ortho projection, ancillary windows flip their 2D output matrix.
+   // No CRTC rotation state is ever touched, so nothing outlives the process.
+   //
+   // Threading (the first incarnation predated BGFX multithreading and did everything at present
+   // time; that is a race now): the bgfx API thread (m_renderThread) creates the bgfx objects,
+   // selects the slot each frame renders into and swaps window back buffers -- all in
+   // UpdateOwnedScanout(), before bgfx::frame(). The present thread (BGFXRenderThread) only probes
+   // the pool and commits; it learns which slot each rendered frame targeted through the SPSC
+   // queue below, ordered by the bgfx frame pipeline itself.
+   struct OwnedScanout
+   {
+      bgfx::TextureHandle tex[3] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+      bgfx::FrameBufferHandle fb[3] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+      class RenderTarget* rt[3] {};
+      class RenderTarget* originalBackBuffer = nullptr; // kept so the fallback can restore it
+      int slot = 0; // slot the NEXT built frame renders into; bgfx API thread only
+      int bindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done; API thread only
+      std::atomic<bool> active { false }; // bind complete, built frames target owned RTs (release by API thread)
+      std::atomic<const VPX::Kms::ScanoutSlots*> slots { nullptr }; // published by the present thread once the pool is ready
+      std::atomic<bool> disableRequested { false }; // present thread saw a commit failure; API thread restores
+      // SPSC ring, API thread -> present thread: "this slot holds a fully rendered frame". Never
+      // more than two in flight (bgfx pipelines one frame), 8 is paranoia headroom.
+      uint8_t slotQ[8] {};
+      std::atomic<uint32_t> slotQPush { 0 }, slotQPop { 0 };
+   };
+   std::array<OwnedScanout, 8> m_ownedScanout; // indexed like m_outputWnd
+   bool m_ownedScanoutPresentSkipped = false; // API thread only
+   void BindOwnedScanoutToBgfx(size_t idx, VPX::Window* wnd); // bgfx API thread
+   void UpdateOwnedScanout(); // bgfx API thread, after pass encoding, before bgfx::frame()
+   void DisableOwnedScanout(const char* why); // bgfx API thread
+   // A render target that DRM scans out directly has the opposite vertical origin to a normal GL
+   // framebuffer. Fullscreen quads and LiveUI check these to render right-way-up into it.
+   bool IsScanoutRenderTarget(const class RenderTarget* rt) const;
+   bool IsCurrentPassScanout() const;
    #endif
    #ifdef __RK3588__
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
