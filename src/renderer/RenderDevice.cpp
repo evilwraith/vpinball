@@ -2579,7 +2579,7 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          double(s_drawSum) / perFrame, double(s_primSum) / perFrame, usingPrepass ? "IN USE" : "DISABLED (statics re-rendered every frame)");
       if (g_pplayer->m_renderer != nullptr)
       {
-         PLOGI.printf("[4kpDebug][gpu_timers]   ancillary windows: %u rendered, %u skipped by Standalone/AncillaryMaxFPS",
+         PLOGI.printf("[4kpDebug][gpu_timers]   ancillary windows: %u rendered, %u skipped by Standalone/AncillaryFrameDivider",
             g_pplayer->m_renderer->m_ancillaryWndRenders, g_pplayer->m_renderer->m_ancillaryWndSkips);
          g_pplayer->m_renderer->m_ancillaryWndRenders = 0;
          g_pplayer->m_renderer->m_ancillaryWndSkips = 0;

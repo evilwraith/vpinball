@@ -1421,10 +1421,17 @@ PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,
 // present halved to a hard 30 fps (backport/1081-frame-pacing-plan.md, HDP measurement). Real
 // DMDs update at ~15-30 Hz and backglasses are mostly static, so re-rendering them at 60 buys
 // nothing. When a window is skipped, nothing is drawn or swapped for it and the KMS presenter's
-// producer-starvation path keeps the previous buffer on scanout for free. 0 renders every frame.
-PropInt(Standalone, AncillaryMaxFPS, "Ancillary window max FPS"s,
-   "Cap how often the backglass, score view and topper windows re-render. The last rendered frame "
-   "stays on screen between updates. 0 = every playfield frame. RK3588 only."s, 0, 120, 30);
+// producer-starvation path keeps the previous buffer on scanout for free.
+//
+// A frame DIVIDER, not a wall-clock Hz cap, on purpose: a Hz cap at or above the current frame
+// rate never skips, so a loop stuck at 30 fps under a 30 Hz cap stays stuck (every frame is
+// always "due" -- measured exactly so on the HDP, 2026-08-30). A divider always skips, at any
+// loop rate, which is what lets the loop climb back out of the vblank-halved equilibrium.
+// Windows are staggered across frames so two panels never re-render on the same playfield frame.
+PropInt(Standalone, AncillaryFrameDivider, "Ancillary window frame divider"s,
+   "Re-render the backglass, score view and topper windows on every Nth playfield frame, "
+   "staggered so no two land on the same frame. The last rendered frame stays on screen between "
+   "updates. 1 = every frame. RK3588 only."s, 1, 8, 2);
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 // 4kp/HDP only. Render the playfield below the panel's native resolution and let the display
 // controller (RK3588 VOP2) upscale it at scanout. That removes a full-resolution GPU pass and stops

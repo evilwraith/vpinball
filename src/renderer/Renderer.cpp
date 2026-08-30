@@ -3027,6 +3027,9 @@ void Renderer::RenderFrame()
    UpdateBloom(renderedRT);
 
    // Render ancillary windows (eventually embedded in the main window, so must be done after main rendering but before post process)
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   m_ancillaryFrameCounter++; // Drives Standalone/AncillaryFrameDivider (see RenderAncillaryWindow)
+#endif
    RenderAncillaryWindow(VPXWindowId::VPXWINDOW_Backglass, g_pplayer->m_backglassOutput, renderedRT, g_pplayer->m_ancillaryWndRenderers[VPXWindowId::VPXWINDOW_Backglass]);
    RenderAncillaryWindow(VPXWindowId::VPXWINDOW_ScoreView, g_pplayer->m_scoreViewOutput, renderedRT, g_pplayer->m_ancillaryWndRenderers[VPXWindowId::VPXWINDOW_ScoreView]);
    RenderAncillaryWindow(VPXWindowId::VPXWINDOW_Topper, g_pplayer->m_topperOutput, renderedRT, g_pplayer->m_ancillaryWndRenderers[VPXWindowId::VPXWINDOW_Topper]);
@@ -3430,29 +3433,24 @@ VPXRenderContext2D& Renderer::GetAncillaryRenderContext(VPXWindowId window, floa
 void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput& output, RenderTarget* embedRT, const vector<AncillaryRendererDef>& ancillaryWndRenderers)
 {
 #if defined(ENABLE_BGFX) && defined(__RK3588__)
-   // Standalone/AncillaryMaxFPS: skip re-rendering a floating window that is not due yet. Nothing
-   // is drawn or cleared for it, so BGFX never touches its swap chain this frame and the KMS
-   // presenter's producer-starvation path keeps the previous buffer on scanout untouched. Floating
-   // windows only: an embedded region lives inside the playfield back buffer, which is fully
-   // redrawn every frame, so skipping it would leave the region unpainted. Bypassed while that
-   // window's display settings page is open, so rotation/scale edits get live feedback.
+   // Standalone/AncillaryFrameDivider: re-render a floating window only on every Nth playfield
+   // frame. When skipped, nothing is drawn or cleared for it, so BGFX never touches its swap chain
+   // this frame and the KMS presenter's producer-starvation path keeps the previous buffer on
+   // scanout untouched. A frame divider rather than a wall-clock cap: a Hz cap at or above the
+   // current frame rate never skips, so a loop vblank-halved to 30 fps under a 30 Hz cap stays
+   // there (measured on the HDP). The window id staggers the phase so two panels never re-render
+   // on the same frame -- the vblank cliff cares about peak per-frame GPU, not the average.
+   // Floating windows only: an embedded region lives inside the playfield back buffer, which is
+   // fully redrawn every frame, so skipping it would leave the region unpainted. Bypassed while
+   // that window's display settings page is open, so rotation/scale edits get live feedback.
    if (output.GetMode() == VPX::RenderOutput::OM_WINDOW
       && !g_pplayer->m_liveUI->m_inGameUI.IsOpened(s_displaySettingsPages[window]))
    {
-      const int maxFps = m_table->m_settings.GetStandalone_AncillaryMaxFPS();
-      if (maxFps > 0)
+      const int divider = m_table->m_settings.GetStandalone_AncillaryFrameDivider();
+      if (divider > 1 && ((m_ancillaryFrameCounter + static_cast<uint64_t>(window)) % static_cast<uint64_t>(divider)) != 0)
       {
-         const uint64_t now = usec();
-         if (now < m_ancillaryWndNextRenderUs[window])
-         {
-            m_ancillaryWndSkips++;
-            return;
-         }
-         // Accumulator schedule, so a 30 Hz cap on a 60 Hz frame loop renders exactly every second
-         // frame instead of beating against it; after a stall, fall back to one interval from now.
-         const uint64_t interval = 1000000ull / static_cast<uint64_t>(maxFps);
-         const uint64_t aligned = m_ancillaryWndNextRenderUs[window] + interval;
-         m_ancillaryWndNextRenderUs[window] = aligned > now ? aligned : now + interval;
+         m_ancillaryWndSkips++;
+         return;
       }
       m_ancillaryWndRenders++;
    }
