@@ -183,6 +183,7 @@ public:
       class RenderTarget* originalBackBuffer = nullptr; // kept so the fallback can restore it
       int slot = 0; // slot the NEXT built frame renders into; bgfx API thread only
       int bindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done; API thread only
+      int bindAttempts = 0; // override retries while bgfx has not yet processed the texture creation
       std::atomic<bool> active { false }; // bind complete, built frames target owned RTs (release by API thread)
       std::atomic<const VPX::Kms::ScanoutSlots*> slots { nullptr }; // published by the present thread once the pool is ready
       std::atomic<bool> disableRequested { false }; // present thread saw a commit failure; API thread restores

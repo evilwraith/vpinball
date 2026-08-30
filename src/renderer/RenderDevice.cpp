@@ -2426,40 +2426,57 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, VPX::Window* wnd)
       return;
    }
 
+   // Overrides first, framebuffers only once every override has taken. Under BGFX multithreading
+   // the createTexture2D from the previous step may not have been processed by the render thread
+   // yet when this runs (its commands render only after the frame that recorded them is kicked),
+   // in which case overrideInternal is silently dropped -- seen live as window 0 failing while
+   // windows whose create happened seconds earlier bound fine. overrideInternal is idempotent for
+   // an already-taken handle, so retrying across frames is safe.
+   bool allTook = true;
+   for (int i = 0; i < slots.Count(); ++i)
+   {
+      const VPX::Kms::ScanoutSlots::Slot& slot = slots.GetSlot(i);
+      const uintptr_t bound = bgfx::overrideInternal(own.tex[i], uintptr_t(slot.texture));
+      if (bound != uintptr_t(slot.texture))
+         allTook = false;
+   }
+   if (!allTook)
+   {
+      if (++own.bindAttempts < 16)
+         return; // creation not processed yet; retry next presented frame
+      own.bindStep = 2;
+      PLOGE.printf("[4kpDebug][owned_scanout] window %zu: override never took after %d attempts; staying on the EGL surface path", idx, own.bindAttempts);
+      return;
+   }
+
    own.bindStep = 2;
    bool allValid = true;
 
    for (int i = 0; i < slots.Count(); ++i)
    {
       const VPX::Kms::ScanoutSlots::Slot& slot = slots.GetSlot(i);
-      const uintptr_t bound = bgfx::overrideInternal(own.tex[i], uintptr_t(slot.texture));
-      const bool tookEffect = (bound == uintptr_t(slot.texture));
-
-      if (tookEffect)
+      // Only the playfield composites with depth; the ancillary panels are 2D and their existing
+      // back buffers carry no depth attachment either.
+      if (idx == 0)
       {
-         // Only the playfield composites with depth; the ancillary panels are 2D and their existing
-         // back buffers carry no depth attachment either.
-         if (idx == 0)
+         const bgfx::TextureHandle depth = bgfx::createTexture2D(w, h, false, 1,
+            bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+         if (bgfx::isValid(depth))
          {
-            const bgfx::TextureHandle depth = bgfx::createTexture2D(w, h, false, 1,
-               bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
-            if (bgfx::isValid(depth))
-            {
-               bgfx::TextureHandle attachments[2] = { own.tex[i], depth };
-               own.fb[i] = bgfx::createFrameBuffer(2, attachments, false);
-            }
+            bgfx::TextureHandle attachments[2] = { own.tex[i], depth };
+            own.fb[i] = bgfx::createFrameBuffer(2, attachments, false);
          }
-         else
-         {
-            own.fb[i] = bgfx::createFrameBuffer(1, &own.tex[i], false);
-         }
+      }
+      else
+      {
+         own.fb[i] = bgfx::createFrameBuffer(1, &own.tex[i], false);
       }
 
       if (!bgfx::isValid(own.fb[i]))
          allValid = false;
 
-      PLOGI.printf("[4kpDebug][owned_scanout] window %zu slot %d: gl texture %u -> bgfx texture %u, override %s, framebuffer %s",
-         idx, i, slot.texture, own.tex[i].idx, tookEffect ? "MATCH" : "did not take",
+      PLOGI.printf("[4kpDebug][owned_scanout] window %zu slot %d: gl texture %u -> bgfx texture %u, override MATCH (attempt %d), framebuffer %s",
+         idx, i, slot.texture, own.tex[i].idx, own.bindAttempts + 1,
          bgfx::isValid(own.fb[i]) ? "valid" : "INVALID");
    }
 
