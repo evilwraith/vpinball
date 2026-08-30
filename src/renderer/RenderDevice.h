@@ -177,9 +177,11 @@ public:
    // queue below, ordered by the bgfx frame pipeline itself.
    struct OwnedScanout
    {
-      bgfx::TextureHandle tex[3] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
-      bgfx::FrameBufferHandle fb[3] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
-      class RenderTarget* rt[3] {};
+      // 4 = VPX::Kms::kScanoutSlotCount (forward-declared here, so the literal): quad slots with
+      // the extra frame of age the vendor VOP2 ISR requires, matching 10.8.0.
+      bgfx::TextureHandle tex[4] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+      bgfx::FrameBufferHandle fb[4] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+      class RenderTarget* rt[4] {};
       class RenderTarget* originalBackBuffer = nullptr; // kept so the fallback can restore it
       int slot = 0; // slot the NEXT built frame renders into; bgfx API thread only
       int bindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done; API thread only

@@ -43,10 +43,14 @@
 namespace VPX::Kms
 {
 
-// Three, for the reason current-gl documents: two means the producer must wait for the previous
-// flip before it has anywhere to draw, which caps throughput as soon as frame work exceeds the
-// vblank budget. A fourth would only add frame age.
-inline constexpr int kScanoutSlotCount = 3;
+// Four, matching current-gl's m_playfieldGbmRenderSlots[4] and for the same measured reason
+// (backport/reset-playfield-flicker.md): the vendor VOP2 ISR completes flip events WITHOUT
+// verifying the latch, so a just-replaced buffer must sit out one extra frame before it is
+// rendered into again -- with only three, rendering at full rate reuses a buffer the display can
+// still be scanning, which shows as ghosting on the fastest movers (ball and flippers; seen live
+// on the HDP 2026-08-30 once owned scanout reached ~60 fps). Three was enough for throughput
+// (two makes the producer wait for the previous flip); the fourth buys the safety frame of age.
+inline constexpr int kScanoutSlotCount = 4;
 
 class ScanoutSlots
 {
