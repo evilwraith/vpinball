@@ -2650,10 +2650,29 @@ void RenderDevice::PresentKmsWindows()
                continue; // nothing newly rendered; the last committed buffer stays on scanout
             const int slotIdx = own.slotQ[pop % sizeof(own.slotQ)];
             const VPX::Kms::ScanoutSlots::Slot& slot = own.slots.load(std::memory_order_relaxed)->GetSlot(slotIdx);
-            if (presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight()))
+            // Only the playfield's drain may block: the three panels run three different refresh
+            // clocks, and serially waiting on every CRTC's latch cost ~1.5 misaligned vblanks per
+            // frame (38 fps with a 10 ms GPU). An ancillary commit that cannot land yet stays
+            // queued and is retried next frame; its previous buffer remains on scanout.
+            if (wndIdx == 0)
             {
-               own.slotQPop.store(pop + 1, std::memory_order_release);
-               continue;
+               if (presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight()))
+               {
+                  own.slotQPop.store(pop + 1, std::memory_order_release);
+                  continue;
+               }
+            }
+            else
+            {
+               const VPX::Kms::WindowPresenter::OwnedPresentResult r
+                  = presenter.PresentOwnedFbIfIdle(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight());
+               if (r == VPX::Kms::WindowPresenter::OwnedPresentResult::Busy)
+                  continue; // deferred, retry next frame
+               if (r == VPX::Kms::WindowPresenter::OwnedPresentResult::Committed)
+               {
+                  own.slotQPop.store(pop + 1, std::memory_order_release);
+                  continue;
+               }
             }
             own.disableRequested.store(true, std::memory_order_release);
             // Fall through to the EGL present below until the API thread restores the back buffers;

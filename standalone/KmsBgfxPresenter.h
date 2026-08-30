@@ -391,6 +391,40 @@ public:
       return CommitFb(fbId, srcW, srcH);
    }
 
+   // Non-blocking variant for the ancillary windows. The panels run three different refresh
+   // clocks (60 / 60.03 / 59.64 Hz on the HDP), so serially waiting for every CRTC's latch in the
+   // frame loop cost ~1.5 misaligned vblanks per frame -- measured as 38 fps with a 10 ms GPU.
+   // Only the playfield's drain may pace the loop; an ancillary commit that cannot land yet is
+   // deferred to a later frame, the previous buffer simply stays on scanout. Same lesson as
+   // 10.8.0's "bound aux page-flip wait".
+   enum class OwnedPresentResult { Committed, Busy, Failed };
+   OwnedPresentResult PresentOwnedFbIfIdle(const uint32_t fbId, const uint32_t srcW, const uint32_t srcH)
+   {
+      if (!m_ready || fbId == 0)
+         return OwnedPresentResult::Failed;
+      if (m_flipPending && m_drmFd >= 0)
+      {
+         drmEventContext ev {};
+         ev.version = 3;
+         ev.page_flip_handler2 = &WindowPresenter::FlipHandler;
+         pollfd pfd { m_drmFd, POLLIN, 0 };
+         if (poll(&pfd, 1, 0) > 0)
+            drmHandleEvent(m_drmFd, &ev);
+         if (m_flipPending)
+         {
+            // Lost-event bound, mirroring DrainPendingFlip's: a flip whose event never arrives
+            // must not wedge this window forever.
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            const uint64_t nowUs = uint64_t(ts.tv_sec) * 1000000ull + uint64_t(ts.tv_nsec) / 1000ull;
+            if (nowUs - m_flipCommitUs < 100000ull)
+               return OwnedPresentResult::Busy;
+            m_flipPending = false;
+         }
+      }
+      return CommitFb(fbId, srcW, srcH) ? OwnedPresentResult::Committed : OwnedPresentResult::Failed;
+   }
+
    // The atomic commit itself, shared by the gbm_surface path and the owned-slot path so the four
    // hard contracts at the top of this file live in exactly one place. srcW/srcH describe the
    // BUFFER, which is not the mode whenever the buffer is deliberately smaller (BackBufferScale).
@@ -446,6 +480,11 @@ public:
       if (req && !addFailed)
       {
          m_flipPending = true;
+         {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            m_flipCommitUs = uint64_t(ts.tv_sec) * 1000000ull + uint64_t(ts.tv_nsec) / 1000ull;
+         }
          ret = drmModeAtomicCommit(m_drmFd, req, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, this);
          if (ret != 0)
             m_flipPending = false;
@@ -695,6 +734,7 @@ private:
    int m_offsetX = 0, m_offsetY = 0;
    bool m_ready = false;
    bool m_flipPending = false;
+   uint64_t m_flipCommitUs = 0; // when the in-flight commit was issued; lost-event bound in PresentOwnedFbIfIdle
    int m_starveCount = 0;
    bool m_rotationProbed = false;
    uint64_t m_commitErrors = 0;
