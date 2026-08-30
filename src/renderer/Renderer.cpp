@@ -3444,13 +3444,17 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
       {
          const uint64_t now = usec();
          if (now < m_ancillaryWndNextRenderUs[window])
+         {
+            m_ancillaryWndSkips++;
             return;
+         }
          // Accumulator schedule, so a 30 Hz cap on a 60 Hz frame loop renders exactly every second
          // frame instead of beating against it; after a stall, fall back to one interval from now.
          const uint64_t interval = 1000000ull / static_cast<uint64_t>(maxFps);
          const uint64_t aligned = m_ancillaryWndNextRenderUs[window] + interval;
          m_ancillaryWndNextRenderUs[window] = aligned > now ? aligned : now + interval;
       }
+      m_ancillaryWndRenders++;
    }
 #endif
    bool isOutputLinear;

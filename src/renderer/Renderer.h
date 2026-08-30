@@ -331,6 +331,13 @@ private:
 public:
    bool m_vrApplyColorKey = false;
    bool m_vrPreviewShrink = false;
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   // Diagnostics for Standalone/AncillaryMaxFPS, read and reset by RenderDevice::LogFrameStats.
+   // Plain ints on purpose: incremented on the logic thread, read on the render thread, and a
+   // torn read costs one wrong stats line.
+   uint32_t m_ancillaryWndRenders = 0; // OM_WINDOW ancillary renders actually performed
+   uint32_t m_ancillaryWndSkips = 0; // OM_WINDOW ancillary renders skipped by the FPS cap
+#endif
 
 private:
    float m_visualNudgeStrength; // whether to shake the table/screen during nudges and how much

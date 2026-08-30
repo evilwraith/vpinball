@@ -2577,6 +2577,13 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
          otherMs, preSubmitMs, otherMs - preSubmitMs);
       PLOGI.printf("[4kpDebug][gpu_timers]   submitted per frame: %.0f draws, %.0f primitives | static prepass %s",
          double(s_drawSum) / perFrame, double(s_primSum) / perFrame, usingPrepass ? "IN USE" : "DISABLED (statics re-rendered every frame)");
+      if (g_pplayer->m_renderer != nullptr)
+      {
+         PLOGI.printf("[4kpDebug][gpu_timers]   ancillary windows: %u rendered, %u skipped by Standalone/AncillaryMaxFPS",
+            g_pplayer->m_renderer->m_ancillaryWndRenders, g_pplayer->m_renderer->m_ancillaryWndSkips);
+         g_pplayer->m_renderer->m_ancillaryWndRenders = 0;
+         g_pplayer->m_renderer->m_ancillaryWndSkips = 0;
+      }
       // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
       // bgfx thread, so bgfx::frame() runs the backend inline and neither side ever blocks on the
       // other. What is left of bgfx::frame() after issuing is the swap, which blocks on the GPU.
