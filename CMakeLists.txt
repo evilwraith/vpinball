@@ -96,6 +96,21 @@ if(NOT VPX_HAVE_STD_FORMAT)
    include_directories(BEFORE "${CMAKE_SOURCE_DIR}/third-party/include/compat/cxx-format")
 endif()
 
+# Regenerate git_version.h from the real git state before compiling, into the build tree. The
+# committed src/core/git_version.h is a placeholder only upstream's release CI substitutes, so
+# without this every local build logs "Rev. 9999 (unknown)" and an on-device log cannot tell you
+# whether a deploy landed. GIT_SHA also gets a fingerprint of uncommitted changes -- see
+# make/GenGitVersion.cmake. vpversion.h includes <git_version.h> so this copy wins.
+add_custom_target(gitversion ALL
+   COMMAND ${CMAKE_COMMAND}
+      -DSRC=${CMAKE_SOURCE_DIR}
+      -DOUT=${CMAKE_BINARY_DIR}/generated/git_version.h
+      -P ${CMAKE_SOURCE_DIR}/make/GenGitVersion.cmake
+   BYPRODUCTS ${CMAKE_BINARY_DIR}/generated/git_version.h
+   COMMENT "Stamping git_version.h"
+   VERBATIM)
+include_directories(BEFORE "${CMAKE_BINARY_DIR}/generated")
+
 option(POST_BUILD_COPY_EXT_LIBS "Copy external libraries to build directory" ON)
 if(PLATFORM STREQUAL "macos")
    option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
@@ -978,3 +993,9 @@ elseif(PLATFORM STREQUAL "ios" OR PLATFORM STREQUAL "ios-simulator" OR PLATFORM 
 endif()
 
 include("${CMAKE_SOURCE_DIR}/make/CMakeLists_plugins.txt")
+
+# Every configuration above defines a 'vpinball' target (executable or shared library); make sure
+# none of its sources compile before the stamped git_version.h exists.
+if(TARGET vpinball)
+   add_dependencies(vpinball gitversion)
+endif()

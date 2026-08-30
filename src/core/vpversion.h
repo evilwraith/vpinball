@@ -1,6 +1,9 @@
 #pragma once
 
-#include "git_version.h"
+// Angle brackets on purpose: the build regenerates git_version.h from the real git state into the
+// build tree (make/GenGitVersion.cmake) and prepends that directory to the include path. A quoted
+// include would always find the committed placeholder beside this file first.
+#include <git_version.h>
 
 // Update VERSION_START_SHA in .github\workflows\vpinball.yml to point to the latest commit.
 #define VP_VERSION_MAJOR    10 // X Digits
