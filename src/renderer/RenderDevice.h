@@ -212,6 +212,11 @@ public:
    // Frozen-playfield probe: is the playfield committing fresh buffers (and rotating through the
    // slots), starving on an empty queue, or drowning in GL errors?
    static uint32_t s_pfCommits, s_pfQueueEmpty, s_pfLastFbId, s_pfFbIdsSeen, s_glErrors;
+   // Mali dynamic-buffer write-hazard fix (mali-optimized.md §8): dynamic buffer content lives in
+   // CPU shadows and every drawn buffer takes one transient snapshot per frame, so no GL storage
+   // is written while in flight. s_frameIndex keys the per-frame snapshot caches.
+   static bool s_dynBufferShadow;
+   static uint32_t s_frameIndex;
    static uint64_t s_preSubmitUs;   // render-loop work before the frame reaches BGFX
    uint64_t m_loopTopUs = 0;        // top of the current render-loop iteration
    // Dynamic buffer traffic. Writing to a buffer the GPU may still be reading is what forces a

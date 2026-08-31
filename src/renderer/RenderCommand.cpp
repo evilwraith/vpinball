@@ -227,6 +227,10 @@ void RenderCommand::Execute(const int nInstances, const bool log)
             #if defined(ENABLE_BGFX)
             if (m_mb->m_vb->m_isStatic)
                bgfx::setVertexBuffer(0, m_mb->m_vb->GetStaticBuffer(), m_mb->m_vb->GetVertexOffset(), m_indicesCount);
+            #ifdef __RK3588__
+            else if (const bgfx::TransientVertexBuffer* const tvb = m_mb->m_vb->GetFrameTransient(); tvb != nullptr)
+               bgfx::setVertexBuffer(0, tvb, m_mb->m_vb->GetVertexOffset(), m_indicesCount); // Mali write-hazard fix
+            #endif
             else
                bgfx::setVertexBuffer(0, m_mb->m_vb->GetDynamicBuffer(), m_mb->m_vb->GetVertexOffset(), m_indicesCount);
             bgfx::setInstanceCount(nInstances);
@@ -259,10 +263,18 @@ void RenderCommand::Execute(const int nInstances, const bool log)
             assert(vertexOffset == 0); // BGFX does not support offseted vertices. The buffers must be built accordingly
             if (m_mb->m_vb->m_isStatic)
                bgfx::setVertexBuffer(0, m_mb->m_vb->GetStaticBuffer());
+            #ifdef __RK3588__
+            else if (const bgfx::TransientVertexBuffer* const tvb = m_mb->m_vb->GetFrameTransient(); tvb != nullptr)
+               bgfx::setVertexBuffer(0, tvb); // Mali write-hazard fix: whole-block snapshot, same offsets
+            #endif
             else
                bgfx::setVertexBuffer(0, m_mb->m_vb->GetDynamicBuffer());
             if (m_mb->m_ib->m_isStatic)
                bgfx::setIndexBuffer(m_mb->m_ib->GetStaticBuffer(), m_mb->m_ib->GetIndexOffset() + m_startIndex, m_indicesCount);
+            #ifdef __RK3588__
+            else if (const bgfx::TransientIndexBuffer* const tib = m_mb->m_ib->GetFrameTransient(); tib != nullptr)
+               bgfx::setIndexBuffer(tib, m_mb->m_ib->GetIndexOffset() + m_startIndex, m_indicesCount); // Mali write-hazard fix
+            #endif
             else
                bgfx::setIndexBuffer(m_mb->m_ib->GetDynamicBuffer(), m_mb->m_ib->GetIndexOffset() + m_startIndex, m_indicesCount);
             bgfx::setInstanceCount(nInstances);

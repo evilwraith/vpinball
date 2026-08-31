@@ -1446,6 +1446,14 @@ PropBool(Standalone, 4kpOwnedScanoutPlayfieldOnly, "Owned scanout: playfield onl
 PropBool(Standalone, 4kpDisableStaticPrepass, "Disable static prepass"s,
    "Re-render static parts every frame instead of using the prerendered static buffer. "
    "Diagnostic; costs GPU time. RK3588 only."s, false);
+// mali-optimized.md §8 ported to BGFX: the Mali blob stalls ~0.4 ms on every glBufferSubData into
+// storage an in-flight draw references, and without the eglSwapBuffers drain (owned scanout) it
+// tears instead -- the frozen ball / missing flashers / absent LiveUI of the mixed-mode runs.
+// With this on, dynamic buffer updates land in CPU shadows and each drawn buffer binds one
+// transient snapshot per frame, so no GL storage is ever written while the GPU might read it.
+PropBool(Standalone, 4kpDynamicBufferShadow, "Dynamic buffer shadow"s,
+   "Route dynamic vertex/index buffer updates through CPU shadows and per-frame transient "
+   "snapshots, avoiding the Mali driver's in-flight buffer write hazard. RK3588 only."s, true);
 // Periodic frame breakdown to the log: fps, where the CPU frame goes (submit vs present), and GPU
 // time both whole-frame and per pass. Same setting name as the 10.8.0 fork so a like-for-like
 // comparison needs no config difference.

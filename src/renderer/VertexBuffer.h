@@ -34,6 +34,11 @@ public:
    #if defined(ENABLE_BGFX)
    bgfx::VertexBufferHandle GetStaticBuffer() const;
    bgfx::DynamicVertexBufferHandle GetDynamicBuffer() const;
+   #ifdef __RK3588__
+   // Per-frame transient snapshot of the shared dynamic block (Mali write-hazard fix,
+   // mali-optimized.md §8); null for static buffers, shadow mode off, or a full transient ring.
+   const bgfx::TransientVertexBuffer* GetFrameTransient() const;
+   #endif
 
    #elif defined(ENABLE_OPENGL)
    GLuint GetBuffer() const;

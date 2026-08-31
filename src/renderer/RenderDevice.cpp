@@ -1311,6 +1311,19 @@ RenderDevice::RenderDevice(
    // BGFX device initialization
    bgfx::Init init;
 
+   #ifdef __RK3588__
+   // Mali dynamic-buffer write-hazard fix (mali-optimized.md §8): drawn dynamic buffers take one
+   // transient snapshot of their whole shared block per frame, so the ring must hold every drawn
+   // dynamic block, not just the quad traffic. 32/8 MB is generous headroom; the frame stats'
+   // 'transient peak' line reports actual use.
+   RenderDevice::s_dynBufferShadow = g_pplayer->m_ptable->m_settings.GetStandalone_4kpDynamicBufferShadow();
+   if (RenderDevice::s_dynBufferShadow)
+   {
+      init.limits.maxTransientVbSize = 32u << 20;
+      init.limits.maxTransientIbSize = 8u << 20;
+   }
+   #endif
+
    // Adaptive VSync is not implemented for BGFX
    if (syncMode == VideoSyncMode::VSM_ADAPTIVE_VSYNC)
       syncMode = VideoSyncMode::VSM_VSYNC;
@@ -2333,6 +2346,8 @@ uint32_t RenderDevice::s_pfQueueEmpty = 0;
 uint32_t RenderDevice::s_pfLastFbId = 0;
 uint32_t RenderDevice::s_pfFbIdsSeen = 0;
 uint32_t RenderDevice::s_glErrors = 0;
+bool RenderDevice::s_dynBufferShadow = false;
+uint32_t RenderDevice::s_frameIndex = 0;
 uint64_t RenderDevice::s_bgfxFrameUs = 0;
 uint32_t RenderDevice::s_dynVbUpdates = 0;
 uint32_t RenderDevice::s_dynIbUpdates = 0;
@@ -2350,6 +2365,9 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
    // buffers before bgfx::frame() kicks the render.
    if (present)
       UpdateOwnedScanout();
+   // Keys the per-frame transient snapshots of the dynamic-buffer shadows; bump after encoding so
+   // the next frame's draws take fresh copies.
+   ++s_frameIndex;
    #endif
    // Process pending texture upload/mipmap generation before flipping the frame
    for (auto it = m_pendingTextureUploads.cbegin(); it != m_pendingTextureUploads.cend();)

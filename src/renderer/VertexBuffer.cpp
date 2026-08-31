@@ -18,6 +18,19 @@ public:
    bgfx::DynamicVertexBufferHandle m_dvb = BGFX_INVALID_HANDLE;
    bool IsCreated() const override { return m_isStatic ? bgfx::isValid(m_vb) : bgfx::isValid(m_dvb); }
    const bgfx::VertexLayout* const m_vertexDeclaration;
+   #ifdef __RK3588__
+   // mali-optimized.md §8, ported: the Mali blob stalls ~0.4 ms on every write into GPU storage an
+   // in-flight draw references, and (without the eglSwapBuffers drain that used to mask it) tears
+   // instead. Dynamic buffer content therefore lives in a CPU shadow; each frame that draws the
+   // buffer takes one transient snapshot of the whole shared block, so no GL storage is ever
+   // written while the GPU might read it. The persistent m_dvb keeps only the creation-time
+   // content, as a fallback for transient-ring exhaustion.
+   uint8_t* m_shadow = nullptr;
+   bgfx::TransientVertexBuffer m_transient {};
+   uint32_t m_transientFrame = 0xFFFFFFFFu;
+   bool UseCpuShadow() const override { return m_shadow != nullptr; }
+   const bgfx::TransientVertexBuffer* GetFrameTransient();
+   #endif
 
    #elif defined(ENABLE_OPENGL)
    GLuint m_vb = 0;
@@ -43,6 +56,9 @@ SharedVertexBuffer::SharedVertexBuffer(RenderDevice* const rd, VertexFormat fmt,
 
 SharedVertexBuffer::~SharedVertexBuffer()
 {
+   #if defined(ENABLE_BGFX) && defined(__RK3588__)
+   delete[] m_shadow;
+   #endif
    if (IsCreated())
    {
       #if defined(ENABLE_BGFX)
@@ -104,6 +120,15 @@ void SharedVertexBuffer::Upload()
 
       // Upload data block
       #if defined(ENABLE_BGFX)
+      #ifdef __RK3588__
+      // Snapshot the initial content: from here on, updates land in the shadow and draws take
+      // per-frame transient copies (see the member comment).
+      if (!m_isStatic && RenderDevice::s_dynBufferShadow)
+      {
+         m_shadow = new uint8_t[size];
+         memcpy(m_shadow, data, size);
+      }
+      #endif
       if (m_isStatic)
          m_vb = bgfx::createVertexBuffer(mem, *m_vertexDeclaration, BGFX_BUFFER_NONE);
       else
@@ -142,6 +167,17 @@ void SharedVertexBuffer::Upload()
       {
          assert(!m_isStatic);
          #if defined(ENABLE_BGFX)
+         #ifdef __RK3588__
+         if (m_shadow != nullptr)
+         {
+            // Shadow mode: no GPU write here at all; the next GetFrameTransient() snapshots it.
+            memcpy(m_shadow + upload.offset, upload.data, upload.size);
+            delete[] upload.data;
+            ++RenderDevice::s_dynVbUpdates;
+            RenderDevice::s_dynVbBytes += upload.size;
+            continue;
+         }
+         #endif
          bgfx::update(m_dvb, upload.offset / m_bytePerElement, upload.mem);
          #ifdef __RK3588__
          ++RenderDevice::s_dynVbUpdates;
@@ -174,6 +210,33 @@ void SharedVertexBuffer::Upload()
    }
 }
 
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+const bgfx::TransientVertexBuffer* SharedVertexBuffer::GetFrameTransient()
+{
+   if (m_shadow == nullptr)
+      return nullptr;
+   if (m_transientFrame != RenderDevice::s_frameIndex)
+   {
+      if (bgfx::getAvailTransientVertexBuffer(m_count, *m_vertexDeclaration) < m_count)
+      {
+         // Ring exhausted: fall back to the persistent buffer (stale content beats a crash).
+         static bool s_warned = false;
+         if (!s_warned)
+         {
+            s_warned = true;
+            PLOGE.printf("[4kpDebug][dyn_shadow] transient vertex ring exhausted (%u vertices wanted); raise maxTransientVbSize", m_count);
+         }
+         return nullptr;
+      }
+      bgfx::allocTransientVertexBuffer(&m_transient, m_count, *m_vertexDeclaration);
+      memcpy(m_transient.data, m_shadow, size_t(m_count) * m_bytePerElement);
+      m_transientFrame = RenderDevice::s_frameIndex;
+   }
+   return &m_transient;
+}
+
+const bgfx::TransientVertexBuffer* VertexBuffer::GetFrameTransient() const { return m_sharedBuffer->GetFrameTransient(); }
+#endif
 
 
 VertexBuffer::VertexBuffer(RenderDevice* rd, const unsigned int vertexCount, const float* verts, const bool isDynamic, const VertexFormat fmt)

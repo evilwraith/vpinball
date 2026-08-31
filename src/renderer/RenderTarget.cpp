@@ -831,6 +831,10 @@ void RenderTarget::ResolveMSAADepth()
    quad->bind();
    if (quad->m_vb->m_isStatic)
       bgfx::setVertexBuffer(0, quad->m_vb->GetStaticBuffer(), quad->m_vb->GetVertexOffset(), 4);
+   #ifdef __RK3588__
+   else if (const bgfx::TransientVertexBuffer* const tvb = quad->m_vb->GetFrameTransient(); tvb != nullptr)
+      bgfx::setVertexBuffer(0, tvb, quad->m_vb->GetVertexOffset(), 4); // Mali write-hazard fix
+   #endif
    else
       bgfx::setVertexBuffer(0, quad->m_vb->GetDynamicBuffer(), quad->m_vb->GetVertexOffset(), 4);
    bgfx::setInstanceCount(m_nLayers);

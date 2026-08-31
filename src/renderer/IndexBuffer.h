@@ -30,6 +30,11 @@ public:
       return IsEmpty();
    }
 
+   // Whether updates are applied to a CPU shadow instead of the GPU buffer (RK3588: the Mali blob
+   // stalls or tears on writes into in-flight storage, so per-frame dynamic content is snapshotted
+   // to transient buffers at draw time; see mali-optimized.md §8 and SharedVertexBuffer).
+   virtual bool UseCpuShadow() const { return false; }
+
    void Lock(Buf* buffer, const unsigned int offset, const unsigned int size, void*& data)
    {
       assert(!m_isStatic || !IsCreated()); // Static buffers can't be locked after first upload
@@ -38,7 +43,7 @@ public:
       m_lock.offset = offset;
       m_lock.size = size;
       #if defined(ENABLE_BGFX)
-      if (IsCreated()) {
+      if (IsCreated() && !UseCpuShadow()) {
          m_lock.mem = bgfx::alloc(m_lock.size);
          m_lock.data = m_lock.mem->data;
       }
@@ -134,6 +139,9 @@ public:
    #if defined(ENABLE_BGFX)
    bgfx::IndexBufferHandle GetStaticBuffer() const;
    bgfx::DynamicIndexBufferHandle GetDynamicBuffer() const;
+   #ifdef __RK3588__
+   const bgfx::TransientIndexBuffer* GetFrameTransient() const; // Mali write-hazard fix, see VertexBuffer
+   #endif
 
    #elif defined(ENABLE_OPENGL)
    GLuint GetBuffer() const;

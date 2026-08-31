@@ -15,6 +15,14 @@ public:
    bgfx::IndexBufferHandle m_ib = BGFX_INVALID_HANDLE;
    bgfx::DynamicIndexBufferHandle m_dib = BGFX_INVALID_HANDLE;
    bool IsCreated() const override { return m_isStatic ? bgfx::isValid(m_ib) : bgfx::isValid(m_dib); }
+   #ifdef __RK3588__
+   // Mali write-hazard fix, mirroring SharedVertexBuffer (mali-optimized.md §8).
+   uint8_t* m_shadow = nullptr;
+   bgfx::TransientIndexBuffer m_transient {};
+   uint32_t m_transientFrame = 0xFFFFFFFFu;
+   bool UseCpuShadow() const override { return m_shadow != nullptr; }
+   const bgfx::TransientIndexBuffer* GetFrameTransient();
+   #endif
 
    #elif defined(ENABLE_OPENGL)
    GLuint m_ib = 0;
@@ -30,6 +38,9 @@ public:
 
 SharedIndexBuffer::~SharedIndexBuffer()
 {
+   #if defined(ENABLE_BGFX) && defined(__RK3588__)
+   delete[] m_shadow;
+   #endif
    if (IsCreated())
    {
       #if defined(ENABLE_BGFX)
@@ -92,6 +103,13 @@ void SharedIndexBuffer::Upload()
 
       // Upload data block
       #if defined(ENABLE_BGFX)
+      #ifdef __RK3588__
+      if (!m_isStatic && RenderDevice::s_dynBufferShadow)
+      {
+         m_shadow = new uint8_t[size];
+         memcpy(m_shadow, data, size);
+      }
+      #endif
       if (m_isStatic)
          m_ib = bgfx::createIndexBuffer(mem, m_format == IndexBuffer::Format::FMT_INDEX16 ? BGFX_BUFFER_NONE : BGFX_BUFFER_INDEX32);
       else
@@ -129,6 +147,16 @@ void SharedIndexBuffer::Upload()
       {
          assert(!m_isStatic);
          #if defined(ENABLE_BGFX)
+         #ifdef __RK3588__
+         if (m_shadow != nullptr)
+         {
+            memcpy(m_shadow + upload.offset, upload.data, upload.size);
+            delete[] upload.data;
+            ++RenderDevice::s_dynIbUpdates;
+            RenderDevice::s_dynIbBytes += upload.size;
+            continue;
+         }
+         #endif
          bgfx::update(m_dib, upload.offset / m_bytePerElement, upload.mem);
          #ifdef __RK3588__
          ++RenderDevice::s_dynIbUpdates;
@@ -160,6 +188,34 @@ void SharedIndexBuffer::Upload()
       m_pendingUploads.clear();
    }
 }
+
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+const bgfx::TransientIndexBuffer* SharedIndexBuffer::GetFrameTransient()
+{
+   if (m_shadow == nullptr)
+      return nullptr;
+   if (m_transientFrame != RenderDevice::s_frameIndex)
+   {
+      const bool index32 = m_format != IndexBuffer::Format::FMT_INDEX16;
+      if (bgfx::getAvailTransientIndexBuffer(m_count, index32) < m_count)
+      {
+         static bool s_warned = false;
+         if (!s_warned)
+         {
+            s_warned = true;
+            PLOGE.printf("[4kpDebug][dyn_shadow] transient index ring exhausted (%u indices wanted); raise maxTransientIbSize", m_count);
+         }
+         return nullptr;
+      }
+      bgfx::allocTransientIndexBuffer(&m_transient, m_count, index32);
+      memcpy(m_transient.data, m_shadow, size_t(m_count) * m_bytePerElement);
+      m_transientFrame = RenderDevice::s_frameIndex;
+   }
+   return &m_transient;
+}
+
+const bgfx::TransientIndexBuffer* IndexBuffer::GetFrameTransient() const { return m_sharedBuffer->GetFrameTransient(); }
+#endif
 
 
 IndexBuffer::IndexBuffer(RenderDevice* rd, const unsigned int numIndices, const bool isDynamic, const IndexBuffer::Format format)
