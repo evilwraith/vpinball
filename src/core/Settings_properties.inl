@@ -1440,6 +1440,12 @@ PropBool(Standalone, 4kpOwnedScanout, "Owned scanout buffers"s,
 PropBool(Standalone, 4kpOwnedScanoutPlayfieldOnly, "Owned scanout: playfield only"s,
    "With owned scanout on, take over only the playfield window and leave the backglass/score "
    "view/topper on the normal swap path. RK3588 only, experimental."s, false);
+// Diagnostic lever: playfield-only owned scanout loses the statically prerendered content (the
+// playfield mesh and baked lighting) while full-owned and EGL modes keep it. Re-rendering statics
+// every frame splits retention-lost from rendering-broken in one run.
+PropBool(Standalone, 4kpDisableStaticPrepass, "Disable static prepass"s,
+   "Re-render static parts every frame instead of using the prerendered static buffer. "
+   "Diagnostic; costs GPU time. RK3588 only."s, false);
 // Periodic frame breakdown to the log: fps, where the CPU frame goes (submit vs present), and GPU
 // time both whole-frame and per pass. Same setting name as the 10.8.0 fork so a like-for-like
 // comparison needs no config difference.

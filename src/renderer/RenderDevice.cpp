@@ -2878,8 +2878,19 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f + other %.2f | gpu %.2f ms | %zu passes =====",
          double(s_frames) * 1000000.0 / double(nowUs - s_windowStartUs), s_frames,
          frameMs, submitMs, presentMs, frameMs - submitMs - presentMs, gpuMs, s_passes.size());
-      PLOGI.printf("[4kpDebug][gpu_timers]   frame spikes: worst %.1f ms, %u frames over 25 ms",
-         0.001 * double(s_worstFrameUs), s_framesOver25Ms);
+      // RSS alongside the spikes: the libmali swapless mode leaked GPU buffer mappings to a
+      // 6.5 GB OOM kill before this existed; a per-5s figure makes any leak's rate visible in the
+      // first minute instead of at the kill.
+      long rssMb = -1;
+      if (FILE* const statm = fopen("/proc/self/statm", "r"))
+      {
+         long pages = 0, resident = 0;
+         if (fscanf(statm, "%ld %ld", &pages, &resident) == 2)
+            rssMb = resident * (sysconf(_SC_PAGESIZE) / 1024) / 1024;
+         fclose(statm);
+      }
+      PLOGI.printf("[4kpDebug][gpu_timers]   frame spikes: worst %.1f ms, %u frames over 25 ms | rss %ld MB",
+         0.001 * double(s_worstFrameUs), s_framesOver25Ms, rssMb);
       s_worstFrameUs = 0;
       s_framesOver25Ms = 0;
       // The GPU is busy for only part of the frame, so what bgfx::frame() spends beyond that is the

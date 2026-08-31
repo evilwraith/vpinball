@@ -58,6 +58,10 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
    m_disableAO = m_table->m_settings.GetPlayer_DisableAO();
    for (int wnd = VPXWindowId::VPXWINDOW_Backglass; wnd <= VPXWindowId::VPXWINDOW_Topper; wnd++)
       m_ancillaryWndRotation[wnd] = 90 * clamp(m_table->m_settings.GetWindow_Rotation(wnd), 0, 3); // Setting is an index in the 0 / 90 / 180 / 270 literals
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+   if (m_table->m_settings.GetStandalone_4kpDisableStaticPrepass())
+      m_disableStaticPrepass = 1; // diagnostic: statics re-rendered every frame (see the setting)
+#endif
    m_vrPreview = (VRPreviewMode)m_table->m_settings.GetPlayer_VRPreview();
    m_vrPreviewShrink = m_table->m_settings.GetPlayerVR_ShrinkPreview();
    m_FXAA = m_table->m_settings.GetPlayer_FXAA();
