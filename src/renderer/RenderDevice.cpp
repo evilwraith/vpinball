@@ -2644,6 +2644,55 @@ void RenderDevice::PresentKmsWindows()
       static void (*s_glFlush)() = reinterpret_cast<void (*)()>(eglGetProcAddress("glFlush"));
       if (s_glFlush != nullptr)
          s_glFlush();
+      // Stage probe (rate-limited): read the scene texture back to see whether the dynamic content
+      // (ball, flashers) is ever rendered into it -- the one measurement that splits "scene draws
+      // do not execute" from "a later stage samples something stale". bgfx::readTexture completes
+      // two frames later, so each tick logs the previous request's pixels then fires a new one.
+      // Single-threaded configuration only: readTexture is an API-thread call, and in ST mode this
+      // present thread IS the API thread.
+      if (!m_bgfxMultithreaded && g_pplayer && g_pplayer->m_renderer)
+      {
+         static uint64_t s_stageProbeUs = 0;
+         static bgfx::TextureHandle s_staging = BGFX_INVALID_HANDLE;
+         static uint8_t s_probeBuf[16 * 8] = {};
+         static bool s_probePending = false;
+         const uint64_t nowP = usec();
+         if (nowP - s_stageProbeUs > 5000000)
+         {
+            s_stageProbeUs = nowP;
+            RenderTarget* const scene = g_pplayer->m_renderer->GetBackBufferTexture();
+            if (scene != nullptr && bgfx::isValid(scene->GetColorTexHandle()))
+            {
+               if (s_probePending)
+               {
+                  // Two 4-texel clusters blitted from the scene: centre (ball territory) and lower
+                  // third (flipper territory). Raw hex is enough -- the question is whether they
+                  // are nonzero and CHANGE between ticks while the ball moves.
+                  uint64_t a, b, c, d;
+                  memcpy(&a, &s_probeBuf[0], 8);
+                  memcpy(&b, &s_probeBuf[8], 8);
+                  memcpy(&c, &s_probeBuf[64], 8);
+                  memcpy(&d, &s_probeBuf[72], 8);
+                  PLOGI.printf("[4kpDebug][stage_probe] scene centre=%016llx %016llx lowerthird=%016llx %016llx",
+                     (unsigned long long)a, (unsigned long long)b, (unsigned long long)c, (unsigned long long)d);
+               }
+               if (!bgfx::isValid(s_staging))
+                  s_staging = bgfx::createTexture2D(16, 1, false, 1, scene->GetColorTexBgfxFormat(),
+                     BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+               if (bgfx::isValid(s_staging))
+               {
+                  // These calls encode into the NEXT frame (view 0 executes first); the result is
+                  // read on the following probe tick, long past availability.
+                  bgfx::blit(0, bgfx::TextureRegion(s_staging, 0, 0, 4, 1),
+                     bgfx::TextureRegion(scene->GetColorTexHandle(), uint16_t(scene->GetWidth() / 2), uint16_t(scene->GetHeight() / 2), 4, 1));
+                  bgfx::blit(0, bgfx::TextureRegion(s_staging, 8, 0, 4, 1),
+                     bgfx::TextureRegion(scene->GetColorTexHandle(), uint16_t(scene->GetWidth() / 3), uint16_t(2 * scene->GetHeight() / 3), 4, 1));
+                  bgfx::read(bgfx::TextureRegion(s_staging, 0, 0, 16, 1), s_probeBuf);
+                  s_probePending = true;
+               }
+            }
+         }
+      }
       // Frozen-playfield probe: a GL error stream would mean the frame's draws are being dropped
       // before they reach the owned buffers. Drain and count; the stats line reports the total.
       static unsigned int (*s_glGetError)() = reinterpret_cast<unsigned int (*)()>(eglGetProcAddress("glGetError"));

@@ -30,6 +30,10 @@ public:
    #ifdef __RK3588__
    void RequestClear() { m_pendingClear = true; } // see Activate(): rotating scanout buffers hold stale frames
    bool m_pendingClear = false;
+   #if defined(ENABLE_BGFX)
+   bgfx::TextureHandle GetColorTexHandle() const { return m_color_tex; } // stage probe access
+   bgfx::TextureFormat::Enum GetColorTexBgfxFormat() const { return m_colorFormat; }
+   #endif
    #endif
    std::shared_ptr<Sampler> GetColorSampler() const { return m_color_sampler; }
    void UpdateDepthSampler(bool insideBeginEnd);
