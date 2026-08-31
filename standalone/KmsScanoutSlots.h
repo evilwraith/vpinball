@@ -80,6 +80,35 @@ public:
    int Count() const { return kScanoutSlotCount; }
    const Slot& GetSlot(const int i) const { return m_slots[i]; }
 
+   // Re-establish every slot's EGLImage <-> texture sibling binding. On this driver, making other
+   // window surfaces current on the shared context (the ancillary swap chains in playfield-only
+   // owned mode) orphans the imported textures: framebuffers over them go GL-incomplete and every
+   // draw into them is silently dropped -- seen live as GL_INVALID_FRAMEBUFFER_OPERATION from the
+   // probe readback and a playfield stuck cycling its last-good frames. Re-targeting the image is
+   // a few cheap calls; run once per frame before the next frame's draws. Must run on the thread
+   // that owns the EGL context.
+   void RefreshImageBindings()
+   {
+      if (!m_ready)
+         return;
+      static auto imageTargetTexture = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+      if (imageTargetTexture == nullptr || s_glBindTexture == nullptr)
+         return;
+      const GlBindings saved = SaveBindings();
+      for (int i = 0; i < kScanoutSlotCount; ++i)
+      {
+         if (m_slots[i].texture == 0 || m_slots[i].image == EGL_NO_IMAGE_KHR)
+            continue;
+         s_glBindTexture(GL_TEXTURE_2D, m_slots[i].texture);
+         imageTargetTexture(GL_TEXTURE_2D, (GLeglImageOES)m_slots[i].image);
+      }
+      RestoreBindings(saved);
+      // BGFX caches its texture bindings; RestoreBindings put back exactly what it had, but drain
+      // any error the re-target may have latched so it cannot poison a later check.
+      if (s_glGetError != nullptr)
+         for (int drained = 0; drained < 8 && s_glGetError() != GL_NO_ERROR; ++drained) { }
+   }
+
    // Allocates the pool and imports each buffer into GL. Must run on the thread that owns the EGL
    // context, since it creates GL objects. Returns false with everything cleaned up on any failure:
    // a partially built pool is worse than none, because the caller would render into a slot that

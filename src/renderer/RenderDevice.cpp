@@ -2769,6 +2769,12 @@ void RenderDevice::PresentKmsWindows()
          }
          if (own.active.load(std::memory_order_acquire))
          {
+            // Heal the EGLImage sibling bindings every frame: the ancillary swap chains' surface
+            // switches orphan the imported textures on this driver, silently dropping every draw
+            // into the owned framebuffers (GL_INVALID_FRAMEBUFFER_OPERATION). Cheap, and it runs
+            // before the next frame's draws are issued. const_cast: the pointer is stored const
+            // for the commit path, but the slots object is ours and this thread owns the context.
+            const_cast<VPX::Kms::ScanoutSlots*>(own.slots.load(std::memory_order_relaxed))->RefreshImageBindings();
             const uint32_t pop = own.slotQPop.load(std::memory_order_relaxed);
             if (pop == own.slotQPush.load(std::memory_order_acquire))
             {
