@@ -1,14 +1,6 @@
 --- a/src/glcontext_egl.cpp
 +++ b/src/glcontext_egl.cpp
-@@ -4,6 +4,7 @@
-  */
- 
- #include "bgfx_p.h"
-+#include <cstdio> // FORK PATCH (4kp): fprintf diagnostics in GlContext::swap
- 
- #if (BGFX_CONFIG_RENDERER_OPENGLES || BGFX_CONFIG_RENDERER_OPENGL)
- #	include "renderer_gl.h"
-@@ -946,19 +947,75 @@
+@@ -946,6 +946,21 @@
  		bx::deleteObject(g_allocator, _swapChain);
  	}
  
@@ -20,63 +12,23 @@
 +	// else owns presentation -- here VPX renders into its own scanout buffers and commits them
 +	// through KMS with an IN_FENCE_FD -- every one of these calls is pure cost.
 +	//
-+	// Part two: while presentation is skipped, keep the context current on a 1x1 PBUFFER instead
-+	// of the window surface. A window surface that is current but never swapped puts this driver
-+	// (libmali Valhall) on a slow path: GL encode inflated from ~5 ms to ~21 ms per frame across
-+	// every render pass (measured on the HDP, 2026-08-30, same-binary A/B). A pbuffer is
-+	// single-buffered, needs no swap, and stays clear of the gbm surface's buffer state --
-+	// rebinding the window surface to EGL_NO_SURFACE instead hung this driver for 11 seconds and
-+	// took the process down, so surfaceless is NOT used. Every step here fails safe: any error
-+	// leaves the window surface bound and only costs the slow path.
++	// Measured on RK3588: 17 ms of a 25 ms frame, with the GPU idle for the remainder.
++	//
++	// This is the bgfx-side counterpart of SDL_KMSDRM_SKIP_EGL_SURFACE, which already stops SDL owning
++	// presentation for this surface. Runtime rather than compile time, so the first frames (before the
++	// embedder's buffers exist) and any fallback still present normally.
 +	bool s_skipPresent = false;
-+	static EGLSurface s_idleSurface = EGL_NO_SURFACE;
-+	static bool s_idleSurfaceTried = false;
-+	static bool s_boundIdle = false;
 +
  	void GlContext::swap(SwapChainGL* _swapChain)
  	{
  		makeCurrent(_swapChain);
- 
+@@ -953,12 +968,13 @@
  		if (NULL == _swapChain)
  		{
-+			if (s_skipPresent != s_boundIdle
-+			&&  NULL != m_display)
-+			{
-+				if (s_skipPresent && !s_idleSurfaceTried)
-+				{
-+					s_idleSurfaceTried = true;
-+					EGLint surfaceType = 0;
-+					eglGetConfigAttrib(m_display, m_config, EGL_SURFACE_TYPE, &surfaceType);
-+					if (0 != (surfaceType & EGL_PBUFFER_BIT) )
-+					{
-+						const EGLint pbAttrs[] = { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
-+						s_idleSurface = eglCreatePbufferSurface(m_display, m_config, pbAttrs);
-+					}
-+					fprintf(stderr, "[4kp] bgfx skip-present idle pbuffer: %s (surfaceType 0x%x)\n"
-+						, EGL_NO_SURFACE != s_idleSurface ? "created" : "UNAVAILABLE -- staying on the window surface (slow path)"
-+						, surfaceType);
-+				}
-+				if (!s_skipPresent || EGL_NO_SURFACE != s_idleSurface)
-+				{
-+					const EGLSurface draw = s_skipPresent ? s_idleSurface : m_surface;
-+					const EGLSurface read = s_skipPresent ? s_idleSurface : m_readSurface;
-+					if (EGL_TRUE == eglMakeCurrent(m_display, draw, read, m_context) )
-+					{
-+						s_boundIdle = s_skipPresent;
-+					}
-+					else
-+					{
-+						fprintf(stderr, "[4kp] bgfx skip-present rebind FAILED (egl 0x%x); keeping current binding\n"
-+							, eglGetError() );
-+					}
-+				}
-+			}
-+
  			if (NULL != m_display
 -			&&  EGL_NO_SURFACE != m_surface)
 +			&&  EGL_NO_SURFACE != m_surface
-+			&&  !s_skipPresent
-+			&&  !s_boundIdle)
++			&&  !s_skipPresent)
  			{
  				EGL_CHECK(eglSwapBuffers(m_display, m_surface) );
  			}
@@ -86,21 +38,7 @@
  		{
  			_swapChain->swapBuffers();
  		}
-@@ -974,7 +1031,12 @@
- 			{
- 				if (NULL != m_display)
- 				{
--					EGL_CHECK(eglMakeCurrent(m_display, m_surface, m_readSurface, m_context) );
-+					// FORK PATCH (4kp): honour the idle-pbuffer mode; see s_boundIdle above.
-+					EGL_CHECK(eglMakeCurrent(m_display
-+						, s_boundIdle ? s_idleSurface : m_surface
-+						, s_boundIdle ? s_idleSurface : m_readSurface
-+						, m_context
-+						) );
- 				}
- 			}
- 			else
-@@ -1050,5 +1112,12 @@
+@@ -1050,5 +1066,12 @@
  
  } /* namespace gl */ } // namespace bgfx
  

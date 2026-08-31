@@ -1408,8 +1408,11 @@ PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, "
 // single-threaded by calling renderFrame() and init() from one thread, and on this hardware that
 // serialises the frame: eglSwapBuffers blocks until the GPU has drained, and with one thread there
 // is nothing to build the next frame meanwhile. Measured on TAF: 39 -> 44 fps.
+// Default OFF as of 2026-08-31: multithreading existed to hide the eglSwapBuffers block, and with
+// the ancillary frame divider in place ST and MT measure the same fps on the EGL path (~31 on the
+// HDP) while ST has one less pipeline stage of input latency and none of MT's thread contention.
 PropBool(Standalone, 4kpBgfxMultithreaded, "BGFX multithreaded"s,
-   "Let BGFX use separate API and render threads so CPU frame building overlaps GPU work. RK3588 only."s, true);
+   "Let BGFX use separate API and render threads so CPU frame building overlaps GPU work. RK3588 only."s, false);
 // Frame pacing phase 2, revived 2026-08-30. BGFX multithreading alone still serialises
 // issuing + eglSwapBuffers (which blocks on GPU drain) on the render thread: ~20 ms on the HDP,
 // which misses alternate vblanks and locks 30 fps however cheap the frame is. Owned scanout
@@ -1418,9 +1421,17 @@ PropBool(Standalone, 4kpBgfxMultithreaded, "BGFX multithreaded"s,
 // Unlike the deleted first attempt there is no plane reflect: content is rendered right-way-up
 // (IsScanoutRenderTarget + the V-flip in the quad/UI/ancillary paths), so no CRTC state is
 // touched and nothing outlives the process. Falls back to the EGL surface path on any failure.
+// Default OFF as of 2026-08-31: the mechanism works end to end (all three windows, right-way-up,
+// quad slots, ~10 ms GPU) but libmali punishes the swapless mode with ~15 ms of distributed GL
+// encode stalls (issuing 4.4 ms on the EGL path vs ~21 owned, same-binary A/B on the HDP), felt
+// as input lag and judder. Three driver workarounds are mapped and all fail: leaving the window
+// surface bound = slow but stable; EGL_NO_SURFACE = 11 s driver hang; a 1x1 idle pbuffer = still
+// slow AND leaks until the OOM killer fires. Until the driver mystery is cracked, the EGL path
+// (~31 fps, clean input feel) is the shippable configuration.
 PropBool(Standalone, 4kpOwnedScanout, "Owned scanout buffers"s,
    "Render every window into VPX-owned scanout buffers and present them directly with DRM atomic "
-   "commits, so the CPU never waits for the GPU. RK3588 only."s, true);
+   "commits, so the CPU never waits for the GPU. RK3588 only. EXPERIMENTAL: fast present, but the "
+   "GL driver stalls encode in this mode; see Settings_properties.inl."s, false);
 // Periodic frame breakdown to the log: fps, where the CPU frame goes (submit vs present), and GPU
 // time both whole-frame and per pass. Same setting name as the 10.8.0 fork so a like-for-like
 // comparison needs no config difference.
