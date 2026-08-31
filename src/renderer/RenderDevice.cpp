@@ -2725,6 +2725,34 @@ void RenderDevice::PresentKmsWindows()
                   s_pfCommits++; // frozen-playfield probe
                   s_pfLastFbId = slot.fbId;
                   s_pfFbIdsSeen |= 1u << (slotIdx & 7);
+                  // Content probe, once per ~5 s: read four pixels back from the buffer just
+                  // committed. Frozen values across windows = the GPU work never lands in the
+                  // owned buffers; changing values = content is fresh and the freeze is at scanout.
+                  // A tiny readback stalls, which is why it is rate-limited this hard.
+                  static uint64_t s_lastProbeUs = 0;
+                  const uint64_t probeNow = usec();
+                  if (probeNow - s_lastProbeUs > 5000000)
+                  {
+                     s_lastProbeUs = probeNow;
+                     static void (*s_glBindFramebuffer)(unsigned int, unsigned int)
+                        = reinterpret_cast<void (*)(unsigned int, unsigned int)>(eglGetProcAddress("glBindFramebuffer"));
+                     static void (*s_glReadPixels)(int, int, int, int, unsigned int, unsigned int, void*)
+                        = reinterpret_cast<void (*)(int, int, int, int, unsigned int, unsigned int, void*)>(eglGetProcAddress("glReadPixels"));
+                     if (s_glBindFramebuffer && s_glReadPixels)
+                     {
+                        constexpr unsigned int GL_FRAMEBUFFER_ = 0x8D40, GL_RGBA_ = 0x1908, GL_UNSIGNED_BYTE_ = 0x1401;
+                        uint32_t px[4] = {};
+                        const int w = wnd->GetPixelWidth(), h = wnd->GetPixelHeight();
+                        s_glBindFramebuffer(GL_FRAMEBUFFER_, slot.fbo);
+                        s_glReadPixels(w / 2, h / 2, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[0]);
+                        s_glReadPixels(w / 4, h / 4, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[1]);
+                        s_glReadPixels(3 * w / 4, h / 4, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[2]);
+                        s_glReadPixels(w / 2, 3 * h / 4, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[3]);
+                        s_glBindFramebuffer(GL_FRAMEBUFFER_, 0);
+                        PLOGI.printf("[4kpDebug][owned_probe] content slot %d fb %u: %08x %08x %08x %08x",
+                           slotIdx, slot.fbId, px[0], px[1], px[2], px[3]);
+                     }
+                  }
                   own.slotQPop.store(pop + 1, std::memory_order_release);
                   continue;
                }
