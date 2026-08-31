@@ -2746,6 +2746,7 @@ void RenderDevice::PresentKmsWindows()
    }
 
 
+   VPX::Kms::WindowPresenter* boundaryPresenter = nullptr;
    for (size_t wndIdx = 0; wndIdx < m_outputWnd.size(); ++wndIdx)
    {
       VPX::Window* wnd = m_outputWnd[wndIdx];
@@ -2812,18 +2813,9 @@ void RenderDevice::PresentKmsWindows()
             // before the next frame's draws are issued. const_cast: the pointer is stored const
             // for the commit path, but the slots object is ours and this thread owns the context.
             const_cast<VPX::Kms::ScanoutSlots*>(own.slots.load(std::memory_order_relaxed))->RefreshImageBindings();
-            // The driver reclamation boundary (see BoundarySurface): without a real eglSwapBuffers
-            // somewhere on this context, libmali's per-frame GPU mappings accumulate without bound
-            // (~4 GB file-rss at OOM kill, on every owned build ever measured). One pump per frame,
-            // hung off the playfield window since it exists in every mode.
+            // The driver reclamation boundary pumps after the commit loop -- see end of function.
             if (wndIdx == 0)
-            {
-               static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
-               const uint64_t tPump = usec();
-               s_boundary.Init(presenter.GetGbmDevice());
-               s_boundary.Pump();
-               s_boundaryPumpUs += usec() - tPump;
-            }
+               boundaryPresenter = &presenter;
             const uint32_t pop = own.slotQPop.load(std::memory_order_relaxed);
             if (pop == own.slotQPush.load(std::memory_order_acquire))
             {
@@ -2900,6 +2892,29 @@ void RenderDevice::PresentKmsWindows()
          }
       }
       presenter.Present();
+   }
+
+   // The driver reclamation boundary (see BoundarySurface): without a real eglSwapBuffers somewhere
+   // on this context, libmali's per-frame GPU mappings accumulate without bound (~4 GB file-rss at
+   // OOM kill, on every owned build ever measured; a per-frame pump measured rss flat at 4.4 GB over
+   // a full session). Pumped AFTER the commits so any GPU sync the surface switch forces cannot
+   // delay this frame's flip, and on a cadence: reclamation does not need to run at frame rate.
+   if (boundaryPresenter != nullptr)
+   {
+      static uint32_t s_pumpInterval = 0;
+      if (s_pumpInterval == 0)
+         s_pumpInterval = (g_pplayer && g_pplayer->m_ptable)
+            ? (uint32_t)clamp(g_pplayer->m_ptable->m_settings.GetStandalone_4kpBoundaryPumpInterval(), 1, 600) : 1;
+      static uint32_t s_pumpCountdown = 1;
+      if (--s_pumpCountdown == 0)
+      {
+         s_pumpCountdown = s_pumpInterval;
+         static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
+         const uint64_t tPump = usec();
+         s_boundary.Init(boundaryPresenter->GetGbmDevice());
+         s_boundary.Pump();
+         s_boundaryPumpUs += usec() - tPump;
+      }
    }
 }
 #endif
@@ -3053,9 +3068,15 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       const double submitMs = 0.001 * double(s_submitUsSum) / double(s_frames ? s_frames : 1);
       const double presentMs = 0.001 * double(s_presentUsSum) / double(s_frames ? s_frames : 1);
       const double gpuMs = s_frames ? s_gpuMsSum / s_frames : 0.0;
-      PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f + other %.2f | gpu %.2f ms | %zu passes =====",
+      // drain/pump only accumulate in single-threaded mode (in MT mode the present-thread line
+      // reports them); they are inside 'present', shown here so the ST split is visible too.
+      const double drainMs = 0.001 * double(s_drainWaitUs) / double(s_frames ? s_frames : 1);
+      const double pumpMs = 0.001 * double(s_boundaryPumpUs) / double(s_frames ? s_frames : 1);
+      PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f (drain %.2f, pump %.2f) + other %.2f | gpu %.2f ms | %zu passes =====",
          double(s_frames) * 1000000.0 / double(nowUs - s_windowStartUs), s_frames,
-         frameMs, submitMs, presentMs, frameMs - submitMs - presentMs, gpuMs, s_passes.size());
+         frameMs, submitMs, presentMs, drainMs, pumpMs, frameMs - submitMs - presentMs, gpuMs, s_passes.size());
+      if (!m_bgfxMultithreaded)
+         s_drainWaitUs = s_boundaryPumpUs = 0;
       // RSS alongside the spikes: the libmali swapless mode leaked GPU buffer mappings to a
       // 6.5 GB OOM kill before this existed; a per-5s figure makes any leak's rate visible in the
       // first minute instead of at the kill.

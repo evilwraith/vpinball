@@ -1440,6 +1440,13 @@ PropBool(Standalone, 4kpOwnedScanout, "Owned scanout buffers"s,
 PropBool(Standalone, 4kpOwnedScanoutPlayfieldOnly, "Owned scanout: playfield only"s,
    "With owned scanout on, take over only the playfield window and leave the backglass/score "
    "view/topper on the normal swap path. RK3588 only, experimental."s, false);
+// The boundary pump (KmsBgfxPresenter BoundarySurface) is the fix for libmali's swapless GPU
+// mapping hoard (~4 GB file-rss at OOM kill). Reclamation does not need to run at frame rate, so
+// its cadence is tunable: 1 = every frame (proven flat), higher trades pump cost for reclamation
+// latency.
+PropInt(Standalone, 4kpBoundaryPumpInterval, "Boundary pump interval"s,
+   "Pump the driver reclamation boundary surface every N frames under owned scanout. "
+   "RK3588 only."s, 1, 600, 1);
 // Diagnostic lever: playfield-only owned scanout loses the statically prerendered content (the
 // playfield mesh and baked lighting) while full-owned and EGL modes keep it. Re-rendering statics
 // every frame splits retention-lost from rendering-broken in one run.
