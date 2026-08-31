@@ -1,6 +1,6 @@
 --- a/src/glcontext_egl.cpp
 +++ b/src/glcontext_egl.cpp
-@@ -946,6 +946,21 @@
+@@ -946,19 +946,55 @@
  		bx::deleteObject(g_allocator, _swapChain);
  	}
  
@@ -19,12 +19,32 @@
 +	// embedder's buffers exist) and any fallback still present normally.
 +	bool s_skipPresent = false;
 +
++	// FORK PATCH (4kp), part two: while presentation is skipped, keep the context current with NO
++	// draw surface (EGL_KHR_surfaceless_context). A window surface that is current but never
++	// swapped puts this driver (libmali Valhall) on a slow path: GL encode inflated from ~5 ms to
++	// ~21 ms per frame, distributed across every render pass (measured on the HDP, 2026-08-30,
++	// same binary A/B via the embedder's setting). The 10.8.0 fork's owned-scanout GL path runs
++	// surfaceless for the same reason and encodes at full speed. Rebinding is symmetric, so the
++	// embedder's fallback to normal presentation restores the surface.
++	static bool s_boundSurfaceless = false;
++
  	void GlContext::swap(SwapChainGL* _swapChain)
  	{
  		makeCurrent(_swapChain);
-@@ -953,12 +968,13 @@
+ 
  		if (NULL == _swapChain)
  		{
++			if (s_skipPresent != s_boundSurfaceless
++			&&  NULL != m_display)
++			{
++				s_boundSurfaceless = s_skipPresent;
++				EGL_CHECK(eglMakeCurrent(m_display
++					, s_boundSurfaceless ? EGL_NO_SURFACE : m_surface
++					, s_boundSurfaceless ? EGL_NO_SURFACE : m_readSurface
++					, m_context
++					) );
++			}
++
  			if (NULL != m_display
 -			&&  EGL_NO_SURFACE != m_surface)
 +			&&  EGL_NO_SURFACE != m_surface
@@ -38,7 +58,21 @@
  		{
  			_swapChain->swapBuffers();
  		}
-@@ -1050,5 +1066,12 @@
+@@ -974,7 +1010,12 @@
+ 			{
+ 				if (NULL != m_display)
+ 				{
+-					EGL_CHECK(eglMakeCurrent(m_display, m_surface, m_readSurface, m_context) );
++					// FORK PATCH (4kp): honour the surfaceless mode; see s_boundSurfaceless above.
++					EGL_CHECK(eglMakeCurrent(m_display
++						, s_boundSurfaceless ? EGL_NO_SURFACE : m_surface
++						, s_boundSurfaceless ? EGL_NO_SURFACE : m_readSurface
++						, m_context
++						) );
+ 				}
+ 			}
+ 			else
+@@ -1050,5 +1091,12 @@
  
  } /* namespace gl */ } // namespace bgfx
  

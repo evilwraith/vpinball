@@ -20,7 +20,7 @@ FREEIMAGE_PATCHSET=scaled-decode-png-exr-001
 # the headers are simply never included.
 FMT_SHA=11.1.4
 # 4kp: KMSDRM/GBM EGL hunks ported from evilwraith/bgfx@03f25e9 (branch 4kp_fixes)
-BGFX_PATCHSET=kmsdrm-gbm-egl-gles-only-profiler-skippresent-008
+BGFX_PATCHSET=kmsdrm-gbm-egl-gles-only-profiler-skippresent-surfaceless-009
 BGFX_CMAKE_VERSION=1.157.9447-569
 BGFX_PATCH_SHA=8cd1aa31dff55f1855c05d6fee0b82e3c780c468
 PINMAME_SHA=d32f0ad7275b733e25d4644193d93c578707fdce
