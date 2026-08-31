@@ -564,6 +564,20 @@ public:
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcY, 0) < 0;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcW, (uint64_t)srcW << 16) < 0;
          addFailed |= drmModeAtomicAddProperty(req, p, m_props.srcH, (uint64_t)srcH << 16) < 0;
+         // The whole point of minting the fence: without IN_FENCE_FD on the request, VOP2 latches
+         // the buffer whether or not the GPU finished writing it, and the ball/flippers (drawn
+         // last) ghost against the previous frame. This line was missing for the entire owned-path
+         // revival -- it only looked right while upstream CPU drains happened to finish the frame
+         // before the latch.
+         if (fenceFd >= 0 && m_props.inFenceFd != 0)
+            addFailed |= drmModeAtomicAddProperty(req, p, m_props.inFenceFd, (uint64_t)fenceFd) < 0;
+         static bool s_fenceLogged = false;
+         if (!s_fenceLogged)
+         {
+            s_fenceLogged = true;
+            PLOGI.printf("[4kpDebug][owned_scanout] commit fencing: fenceFd %s, IN_FENCE_FD prop %s",
+               fenceFd >= 0 ? "minted" : "UNAVAILABLE", m_props.inFenceFd != 0 ? "attached" : "MISSING on plane");
+         }
       }
 
       int ret = -1;
