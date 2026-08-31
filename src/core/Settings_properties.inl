@@ -1432,6 +1432,14 @@ PropBool(Standalone, 4kpOwnedScanout, "Owned scanout buffers"s,
    "Render every window into VPX-owned scanout buffers and present them directly with DRM atomic "
    "commits, so the CPU never waits for the GPU. RK3588 only. EXPERIMENTAL: fast present, but the "
    "GL driver stalls encode in this mode; see Settings_properties.inl."s, false);
+// Experiment 1 against the libmali slow mode (see the frame-pacing doc): 10.8.0 runs one
+// bound-never-swapped surface at full encode speed, while our all-owned mode leaves THREE
+// swapchains permanently stale. This owns only the playfield -- the ancillary windows keep
+// rendering into their swap chains and bgfx keeps presenting them (patchset -012 skips only the
+// primary swap) -- to test whether the stale ancillary swapchains are what trigger the slow mode.
+PropBool(Standalone, 4kpOwnedScanoutPlayfieldOnly, "Owned scanout: playfield only"s,
+   "With owned scanout on, take over only the playfield window and leave the backglass/score "
+   "view/topper on the normal swap path. RK3588 only, experimental."s, false);
 // Periodic frame breakdown to the log: fps, where the CPU frame goes (submit vs present), and GPU
 // time both whole-frame and per pass. Same setting name as the 10.8.0 fork so a like-for-like
 // comparison needs no config difference.

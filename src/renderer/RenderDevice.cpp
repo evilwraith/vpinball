@@ -2533,9 +2533,12 @@ void RenderDevice::UpdateOwnedScanout()
 
    if (!g_pplayer || !g_pplayer->m_ptable || !g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout())
       return;
+   const bool playfieldOnly = g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanoutPlayfieldOnly();
 
    for (size_t i = 0; i < m_outputWnd.size() && i < m_ownedScanout.size(); ++i)
    {
+      if (playfieldOnly && i != 0)
+         continue; // ancillary windows stay on the swap path (experiment 1, see the setting)
       OwnedScanout& own = m_ownedScanout[i];
       if (!own.active.load(std::memory_order_relaxed))
       {
@@ -2562,20 +2565,24 @@ void RenderDevice::UpdateOwnedScanout()
       m_outputWnd[i]->SetBackBuffer(own.rt[own.slot], false);
    }
 
-   // Presentation can only be skipped once EVERY window is owned: eglSwapBuffers on any surface
-   // drains the whole context, so one window left on the EGL path re-serialises all of them --
-   // which is exactly what skipping the primary alone achieved, namely nothing.
+   // In full mode, presentation is skipped once EVERY window is owned: eglSwapBuffers on any
+   // surface drains the whole context, so one window left on the EGL path re-serialises all of
+   // them. In playfield-only mode (experiment 1) only the primary swap is skipped (the -012 bgfx
+   // patch never skips window swap chains), so the skip engages as soon as the playfield is owned
+   // -- the ancillary swaps keep their measured wait, which is the price of the experiment.
    if (!m_ownedScanoutPresentSkipped && !m_outputWnd.empty())
    {
       size_t active = 0;
+      const size_t needed = playfieldOnly ? 1 : m_outputWnd.size();
       for (size_t i = 0; i < m_outputWnd.size() && i < m_ownedScanout.size(); ++i)
          if (m_ownedScanout[i].active.load(std::memory_order_relaxed))
             ++active;
-      if (active == m_outputWnd.size())
+      if (active >= needed)
       {
          m_ownedScanoutPresentSkipped = true;
          bgfx_set_skip_present(true);
-         PLOGI.printf("[4kpDebug][owned_scanout] all %zu windows owned; BGFX presentation skipped entirely", active);
+         PLOGI.printf("[4kpDebug][owned_scanout] %zu of %zu windows owned (%s); primary BGFX present skipped",
+            active, m_outputWnd.size(), playfieldOnly ? "playfield-only mode" : "all windows");
       }
    }
 }
@@ -2665,6 +2672,7 @@ void RenderDevice::PresentKmsWindows()
       {
          OwnedScanout& own = m_ownedScanout[wndIdx];
          if (g_pplayer && g_pplayer->m_ptable && g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanout()
+            && !(wndIdx != 0 && g_pplayer->m_ptable->m_settings.GetStandalone_4kpOwnedScanoutPlayfieldOnly())
             && own.slots.load(std::memory_order_relaxed) == nullptr)
          {
             presenter.ProbeOwnedScanout();
