@@ -2328,6 +2328,11 @@ uint64_t RenderDevice::s_rtPresentUs = 0;
 uint64_t RenderDevice::s_rtFrames = 0;
 uint64_t RenderDevice::s_drainWaitUs = 0;
 uint64_t RenderDevice::s_auxBusySkips = 0;
+uint32_t RenderDevice::s_pfCommits = 0;
+uint32_t RenderDevice::s_pfQueueEmpty = 0;
+uint32_t RenderDevice::s_pfLastFbId = 0;
+uint32_t RenderDevice::s_pfFbIdsSeen = 0;
+uint32_t RenderDevice::s_glErrors = 0;
 uint64_t RenderDevice::s_bgfxFrameUs = 0;
 uint32_t RenderDevice::s_dynVbUpdates = 0;
 uint32_t RenderDevice::s_dynIbUpdates = 0;
@@ -2618,6 +2623,19 @@ void RenderDevice::PresentKmsWindows()
       static void (*s_glFlush)() = reinterpret_cast<void (*)()>(eglGetProcAddress("glFlush"));
       if (s_glFlush != nullptr)
          s_glFlush();
+      // Frozen-playfield probe: a GL error stream would mean the frame's draws are being dropped
+      // before they reach the owned buffers. Drain and count; the stats line reports the total.
+      static unsigned int (*s_glGetError)() = reinterpret_cast<unsigned int (*)()>(eglGetProcAddress("glGetError"));
+      if (s_glGetError != nullptr)
+         for (int i = 0; i < 8; ++i)
+         {
+            const unsigned int err = s_glGetError();
+            if (err == 0)
+               break;
+            ++s_glErrors;
+            if (s_glErrors <= 3)
+               PLOGE.printf("[4kpDebug][owned_probe] GL error 0x%04x on the present thread", err);
+         }
    }
 
 
@@ -2683,7 +2701,11 @@ void RenderDevice::PresentKmsWindows()
          {
             const uint32_t pop = own.slotQPop.load(std::memory_order_relaxed);
             if (pop == own.slotQPush.load(std::memory_order_acquire))
+            {
+               if (wndIdx == 0)
+                  s_pfQueueEmpty++; // frozen-playfield probe: the API thread handed nothing over
                continue; // nothing newly rendered; the last committed buffer stays on scanout
+            }
             const int slotIdx = own.slotQ[pop % sizeof(own.slotQ)];
             const VPX::Kms::ScanoutSlots::Slot& slot = own.slots.load(std::memory_order_relaxed)->GetSlot(slotIdx);
             // Only the playfield's drain may block: the three panels run three different refresh
@@ -2697,6 +2719,9 @@ void RenderDevice::PresentKmsWindows()
                s_drainWaitUs += usec() - tDrain;
                if (ok)
                {
+                  s_pfCommits++; // frozen-playfield probe
+                  s_pfLastFbId = slot.fbId;
+                  s_pfFbIdsSeen |= 1u << (slotIdx & 7);
                   own.slotQPop.store(pop + 1, std::memory_order_release);
                   continue;
                }
@@ -2930,6 +2955,12 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
             0.001 * double(s_rtRenderUs) / double(s_rtFrames), 0.001 * double(s_rtPresentUs) / double(s_rtFrames),
             0.001 * double(s_drainWaitUs) / double(s_rtFrames), (unsigned long long)s_auxBusySkips);
          s_rtRenderUs = s_rtPresentUs = s_rtFrames = s_drainWaitUs = s_auxBusySkips = 0;
+      }
+      if (s_pfCommits + s_pfQueueEmpty > 0 || s_glErrors > 0)
+      {
+         PLOGI.printf("[4kpDebug][owned_probe] playfield: %u commits, %u empty-queue skips, last fb %u, slot mask 0x%x | %u GL errors",
+            s_pfCommits, s_pfQueueEmpty, s_pfLastFbId, s_pfFbIdsSeen, s_glErrors);
+         s_pfCommits = s_pfQueueEmpty = s_pfFbIdsSeen = s_glErrors = 0;
       }
       // waitRender/waitSubmit are zero by construction here: VPX makes the calling thread the only
       // bgfx thread, so bgfx::frame() runs the backend inline and neither side ever blocks on the
