@@ -2568,6 +2568,26 @@ void RenderDevice::UpdateOwnedScanout()
          BindOwnedScanoutToBgfx(i, m_outputWnd[i]);
          continue;
       }
+      // Override integrity: re-assert every slot's texture override each frame. overrideInternal
+      // is idempotent when the override is intact, and if bgfx ever reverted to its own allocation
+      // (which would leave it rendering off-screen while we commit stale gbm buffers -- no GL
+      // error, frozen panel) this both detects and heals it. API thread, as required.
+      {
+         const VPX::Kms::ScanoutSlots* const slotsPtr = own.slots.load(std::memory_order_relaxed);
+         if (slotsPtr != nullptr)
+            for (int s = 0; s < slotsPtr->Count(); ++s)
+            {
+               const uintptr_t want = uintptr_t(slotsPtr->GetSlot(s).texture);
+               const uintptr_t got = bgfx::overrideInternal(own.tex[s], want);
+               if (got != want)
+               {
+                  static uint32_t s_reverts = 0;
+                  if (++s_reverts <= 5)
+                     PLOGE.printf("[4kpDebug][owned_scanout] window %zu slot %d override DIVERGED (got %p want %p); re-asserted",
+                        i, s, (void*)got, (void*)want);
+               }
+            }
+      }
       // The pending-clear flag is armed when a slot is handed out and consumed by the first pass
       // that targets it, so a still-armed flag means nothing rendered into this buffer this frame
       // (AncillaryFrameDivider skipped the window): keep it for the next frame, hand nothing to
@@ -2660,7 +2680,14 @@ void RenderDevice::PresentKmsWindows()
          if (nowP - s_stageProbeUs > 5000000)
          {
             s_stageProbeUs = nowP;
-            RenderTarget* const scene = g_pplayer->m_renderer->GetBackBufferTexture();
+            // Probe the OWNED playfield texture through bgfx's own blit+read path -- unlike the
+            // GL-side slot-fbo readback this uses the handle bgfx actually renders through, so a
+            // fresh value here with a frozen panel isolates an override/aliasing fault.
+            RenderTarget* scene = nullptr;
+            if (m_ownedScanout[0].active.load(std::memory_order_relaxed))
+               scene = m_ownedScanout[0].rt[m_ownedScanout[0].slot];
+            if (scene == nullptr)
+               scene = g_pplayer->m_renderer->GetBackBufferTexture();
             if (scene != nullptr && bgfx::isValid(scene->GetColorTexHandle()))
             {
                if (s_probePending)
@@ -2677,8 +2704,17 @@ void RenderDevice::PresentKmsWindows()
                      (unsigned long long)a, (unsigned long long)b, (unsigned long long)c, (unsigned long long)d);
                }
                if (!bgfx::isValid(s_staging))
+               {
                   s_staging = bgfx::createTexture2D(16, 1, false, 1, scene->GetColorTexBgfxFormat(),
                      BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+                  static bool s_creationLogged = false;
+                  if (!s_creationLogged)
+                  {
+                     s_creationLogged = true;
+                     PLOGI.printf("[4kpDebug][stage_probe] staging texture (fmt %d): %s",
+                        (int)scene->GetColorTexBgfxFormat(), bgfx::isValid(s_staging) ? "created" : "CREATION FAILED -- probe disabled");
+                  }
+               }
                if (bgfx::isValid(s_staging))
                {
                   // These calls encode into the NEXT frame (view 0 executes first); the result is
