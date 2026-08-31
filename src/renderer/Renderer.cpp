@@ -3460,7 +3460,14 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
    if (output.GetMode() == VPX::RenderOutput::OM_WINDOW
       && !g_pplayer->m_liveUI->m_inGameUI.IsOpened(s_displaySettingsPages[window]))
    {
-      const int divider = m_table->m_settings.GetStandalone_AncillaryFrameDivider();
+      // In playfield-only owned mode the ancillary swap chains are what feed libmali its frame
+      // boundary: without a periodic eglSwapBuffers the driver drops into its slow encode mode and
+      // leaks until the OOM killer fires (measured: table 123, whose aux windows rarely update,
+      // ran at 40 fps in this mode while TAF's active backglass held 60). So the divider must not
+      // starve them -- every aux window renders and swaps every frame here.
+      const bool auxSwapIsDriverBoundary = m_table->m_settings.GetStandalone_4kpOwnedScanout()
+         && m_table->m_settings.GetStandalone_4kpOwnedScanoutPlayfieldOnly();
+      const int divider = auxSwapIsDriverBoundary ? 1 : m_table->m_settings.GetStandalone_AncillaryFrameDivider();
       if (divider > 1 && ((m_ancillaryFrameCounter + static_cast<uint64_t>(window)) % static_cast<uint64_t>(divider)) != 0)
       {
          m_ancillaryWndSkips++;
@@ -3517,6 +3524,15 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
    {
       if (!rendered)
       {
+#if defined(ENABLE_BGFX) && defined(__RK3588__)
+         // In playfield-only owned mode this window's swap IS the driver's frame boundary (see the
+         // divider bypass above), so a table with no renderer for it must still present: keep the
+         // clear-only pass alive so bgfx swaps the chain every frame.
+         if (m_table->m_settings.GetStandalone_4kpOwnedScanout()
+            && m_table->m_settings.GetStandalone_4kpOwnedScanoutPlayfieldOnly())
+         { /* keep the clear */ }
+         else
+#endif
          m_renderDevice->GetCurrentPass()->ClearCommands(); // No rendering done, clear the pass (avoids a useless clear)
       }
       else
