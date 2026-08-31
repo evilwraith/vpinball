@@ -8,6 +8,11 @@
 
 // Uncomment this for logging pass sorting/splitting
 //#define LOG_PASS_SORTING
+#ifdef __RK3588__
+// Frozen-playfield hunt: the graph dump only prints on LogNextFrame(), which the owned-scanout
+// transition triggers once, so this costs nothing in normal frames.
+#define LOG_PASS_SORTING
+#endif
 
 RenderFrame::RenderFrame(RenderDevice* renderDevice)
    : m_rd(renderDevice)

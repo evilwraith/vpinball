@@ -2588,6 +2588,9 @@ void RenderDevice::UpdateOwnedScanout()
          bgfx_set_skip_present(true);
          PLOGI.printf("[4kpDebug][owned_scanout] %zu of %zu windows owned (%s); primary BGFX present skipped",
             active, m_outputWnd.size(), playfieldOnly ? "playfield-only mode" : "all windows");
+         // Frozen-playfield hunt: dump the pass graph (submitted + sorted, with dependencies) for
+         // the first owned frame, so a pruned playfield chain names itself in the log.
+         LogNextFrame();
       }
    }
 }
