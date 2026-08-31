@@ -339,6 +339,96 @@ public:
    // accepting -- guessing the format or the modifier is the easiest way to get a pool that builds
    // and then fails at commit time.
    const ScanoutSlots& GetOwnedSlots() const { return m_ownedSlots; }
+   struct gbm_device* GetGbmDevice() const { return m_prevBo != nullptr ? gbm_bo_get_device(m_prevBo) : nullptr; }
+
+   // A tiny REAL swap chain whose only job is being presented. libmali reclaims its per-frame GPU
+   // allocations at eglSwapBuffers and apparently nowhere else: without any swap on the context,
+   // owned-scanout runs hoard 4+ GB of device-file mappings (file-rss) until the OOM killer fires
+   // -- measured identically on every owned build back to the first working one, and on the idle
+   // pbuffer variant (a pbuffer swap is a no-op, so it reclaims nothing). A 64x64 gbm window
+   // surface swapped for real each frame, with its buffers locked and released immediately, gives
+   // the driver its boundary at the cost mixed-mode's aux swaps already measured as small.
+   class BoundarySurface final
+   {
+   public:
+      // Call on the GL-owning thread once a gbm device is known. Fails safe: any error disables it.
+      bool Init(struct gbm_device* dev)
+      {
+         if (m_failed || m_surface != EGL_NO_SURFACE || dev == nullptr)
+            return m_surface != EGL_NO_SURFACE;
+         EGLDisplay dpy = eglGetCurrentDisplay();
+         EGLContext ctx = eglGetCurrentContext();
+         if (dpy == EGL_NO_DISPLAY || ctx == EGL_NO_CONTEXT)
+            return false;
+         // The surface must be compatible with bgfx's context: resolve the context's own config.
+         EGLint cfgId = 0;
+         if (eglQueryContext(dpy, ctx, EGL_CONFIG_ID, &cfgId) != EGL_TRUE)
+            { Fail("eglQueryContext(EGL_CONFIG_ID)"); return false; }
+         const EGLint attrs[] = { EGL_CONFIG_ID, cfgId, EGL_NONE };
+         EGLConfig cfg = nullptr;
+         EGLint n = 0;
+         if (eglChooseConfig(dpy, attrs, &cfg, 1, &n) != EGL_TRUE || n == 0)
+            { Fail("eglChooseConfig by CONFIG_ID"); return false; }
+         m_gbmSurface = gbm_surface_create(dev, 64, 64, GBM_FORMAT_ARGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+         if (m_gbmSurface == nullptr)
+            { Fail("gbm_surface_create 64x64"); return false; }
+         m_surface = eglCreateWindowSurface(dpy, cfg, (EGLNativeWindowType)m_gbmSurface, nullptr);
+         if (m_surface == EGL_NO_SURFACE)
+            { Fail("eglCreateWindowSurface"); return false; }
+         m_dpy = dpy;
+         PLOGI << "[4kpDebug][owned_scanout] boundary surface up: 64x64 real swap chain feeding driver reclamation";
+         return true;
+      }
+
+      // Swap the boundary once. Saves and restores the thread's current surfaces around it.
+      void Pump()
+      {
+         if (m_surface == EGL_NO_SURFACE)
+            return;
+         EGLContext ctx = eglGetCurrentContext();
+         EGLSurface prevDraw = eglGetCurrentSurface(EGL_DRAW);
+         EGLSurface prevRead = eglGetCurrentSurface(EGL_READ);
+         if (eglMakeCurrent(m_dpy, m_surface, m_surface, ctx) != EGL_TRUE)
+            { Fail("eglMakeCurrent(boundary)"); return; }
+         // Give the swap real work: an untouched back buffer can short-circuit the driver's
+         // frame-end path, and the frame-end path is the entire point of this surface.
+         static void (*s_glBindFramebuffer)(unsigned int, unsigned int)
+            = reinterpret_cast<void (*)(unsigned int, unsigned int)>(eglGetProcAddress("glBindFramebuffer"));
+         static void (*s_glClear)(unsigned int) = reinterpret_cast<void (*)(unsigned int)>(eglGetProcAddress("glClear"));
+         static void (*s_glGetIntegerv)(unsigned int, int*)
+            = reinterpret_cast<void (*)(unsigned int, int*)>(eglGetProcAddress("glGetIntegerv"));
+         if (s_glBindFramebuffer != nullptr && s_glClear != nullptr && s_glGetIntegerv != nullptr)
+         {
+            // FBO binding is CONTEXT state, and bgfx caches it -- restore exactly what was bound.
+            int prevFbo = 0;
+            s_glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &prevFbo);
+            s_glBindFramebuffer(0x8D40 /* GL_FRAMEBUFFER */, 0);
+            s_glClear(0x00004000 /* GL_COLOR_BUFFER_BIT */);
+            eglSwapBuffers(m_dpy, m_surface);
+            s_glBindFramebuffer(0x8D40, (unsigned int)prevFbo);
+         }
+         else
+            eglSwapBuffers(m_dpy, m_surface);
+         // Recycle immediately so the 64x64 chain never runs dry; nothing scans it out.
+         if (struct gbm_bo* bo = gbm_surface_lock_front_buffer(m_gbmSurface))
+            gbm_surface_release_buffer(m_gbmSurface, bo);
+         if (eglMakeCurrent(m_dpy, prevDraw, prevRead, ctx) != EGL_TRUE)
+            Fail("eglMakeCurrent(restore)");
+      }
+
+   private:
+      void Fail(const char* what)
+      {
+         if (!m_failed)
+            PLOGE.printf("[4kpDebug][owned_scanout] boundary surface FAILED at %s (egl 0x%04x); driver reclamation unfed", what, eglGetError());
+         m_failed = true;
+         m_surface = EGL_NO_SURFACE;
+      }
+      EGLDisplay m_dpy = EGL_NO_DISPLAY;
+      EGLSurface m_surface = EGL_NO_SURFACE;
+      struct gbm_surface* m_gbmSurface = nullptr;
+      bool m_failed = false;
+   };
 
    void ProbeOwnedScanout()
    {

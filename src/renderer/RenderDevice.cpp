@@ -2341,6 +2341,7 @@ uint64_t RenderDevice::s_rtPresentUs = 0;
 uint64_t RenderDevice::s_rtFrames = 0;
 uint64_t RenderDevice::s_drainWaitUs = 0;
 uint64_t RenderDevice::s_auxBusySkips = 0;
+uint64_t RenderDevice::s_boundaryPumpUs = 0;
 uint32_t RenderDevice::s_pfCommits = 0;
 uint32_t RenderDevice::s_pfQueueEmpty = 0;
 uint32_t RenderDevice::s_pfLastFbId = 0;
@@ -2811,6 +2812,18 @@ void RenderDevice::PresentKmsWindows()
             // before the next frame's draws are issued. const_cast: the pointer is stored const
             // for the commit path, but the slots object is ours and this thread owns the context.
             const_cast<VPX::Kms::ScanoutSlots*>(own.slots.load(std::memory_order_relaxed))->RefreshImageBindings();
+            // The driver reclamation boundary (see BoundarySurface): without a real eglSwapBuffers
+            // somewhere on this context, libmali's per-frame GPU mappings accumulate without bound
+            // (~4 GB file-rss at OOM kill, on every owned build ever measured). One pump per frame,
+            // hung off the playfield window since it exists in every mode.
+            if (wndIdx == 0)
+            {
+               static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
+               const uint64_t tPump = usec();
+               s_boundary.Init(presenter.GetGbmDevice());
+               s_boundary.Pump();
+               s_boundaryPumpUs += usec() - tPump;
+            }
             const uint32_t pop = own.slotQPop.load(std::memory_order_relaxed);
             if (pop == own.slotQPush.load(std::memory_order_acquire))
             {
@@ -3091,10 +3104,11 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       {
          // The present thread's own split. renderFrame = GL issuing; present = the presenters,
          // of which drain = the playfield's blocking wait for its previous flip to latch.
-         PLOGI.printf("[4kpDebug][gpu_timers]   present thread: renderFrame %.2f ms + present %.2f ms (of which playfield drain+commit %.2f) | aux busy-deferred %llu",
+         PLOGI.printf("[4kpDebug][gpu_timers]   present thread: renderFrame %.2f ms + present %.2f ms (of which playfield drain+commit %.2f, boundary pump %.2f) | aux busy-deferred %llu",
             0.001 * double(s_rtRenderUs) / double(s_rtFrames), 0.001 * double(s_rtPresentUs) / double(s_rtFrames),
-            0.001 * double(s_drainWaitUs) / double(s_rtFrames), (unsigned long long)s_auxBusySkips);
-         s_rtRenderUs = s_rtPresentUs = s_rtFrames = s_drainWaitUs = s_auxBusySkips = 0;
+            0.001 * double(s_drainWaitUs) / double(s_rtFrames), 0.001 * double(s_boundaryPumpUs) / double(s_rtFrames),
+            (unsigned long long)s_auxBusySkips);
+         s_rtRenderUs = s_rtPresentUs = s_rtFrames = s_drainWaitUs = s_auxBusySkips = s_boundaryPumpUs = 0;
       }
       if (s_pfCommits + s_pfQueueEmpty > 0 || s_glErrors > 0)
       {

@@ -209,6 +209,7 @@ public:
    static uint64_t s_uploadUs, s_bgfxFrameUs; // last frame's split of the submit phase, for LogFrameStats
    static uint64_t s_rtRenderUs, s_rtPresentUs, s_rtFrames; // present-thread phase split (renderFrame vs PresentKmsWindows), reset by LogFrameStats
    static uint64_t s_drainWaitUs, s_auxBusySkips; // playfield drain wait inside PresentKmsWindows; aux commits deferred as Busy
+   static uint64_t s_boundaryPumpUs; // cost of the driver-reclamation boundary swap (KmsBgfxPresenter BoundarySurface)
    // Frozen-playfield probe: is the playfield committing fresh buffers (and rotating through the
    // slots), starving on an empty queue, or drowning in GL errors?
    static uint32_t s_pfCommits, s_pfQueueEmpty, s_pfLastFbId, s_pfFbIdsSeen, s_glErrors;
