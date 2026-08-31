@@ -1426,6 +1426,15 @@ PropBool(Standalone, 4kpOwnedScanout, "Owned scanout buffers"s,
 // comparison needs no config difference.
 PropBool(Standalone, 4kpGpuTimers, "Log frame statistics"s,
    "Log frame rate and a GPU time breakdown per render pass every 5 seconds. RK3588 only."s, false);
+// The per-pass numbers need bgfx's Profiler (per-view GPU timestamp queries), and under owned
+// scanout that instrument costs ~15 ms of CPU per frame on this driver -- every profiled run was
+// paying for its own measurement (measured HDP 2026-08-30: 39 fps with it, ~60 without; the same
+// class of cost 10.8.0 found in reading EXT_disjoint_timer_query). Frame-level stats above are
+// our own usec() counters and stay cheap; turn this on only when per-pass attribution is worth a
+// visibly slower run.
+PropBool(Standalone, 4kpGpuTimersPerPass, "Per-pass GPU timing"s,
+   "Collect bgfx per-view GPU timestamps for the per-pass breakdown. EXPENSIVE on this driver "
+   "(~15 ms/frame under owned scanout); frame-level stats do not need it. RK3588 only."s, false);
 // 4kp/HDP only. Upstream re-renders every floating ancillary window (backglass, score view,
 // topper) at panel resolution every playfield frame. On the HDP that extra GPU work pushed TAF
 // from 16.1 ms to 17.5 ms per frame -- across the 16.7 ms vblank budget, so the vblank-latched

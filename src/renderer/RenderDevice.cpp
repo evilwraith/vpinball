@@ -514,8 +514,10 @@ void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
    #ifdef __RK3588__
    // Per-view GPU timing is bgfx's own Profiler (src/renderer.h), which only collects when this
    // flag is set. Our patch makes it round-robin one view per frame and fixes the GLES timer
-   // imports; without the flag it costs nothing and reports nothing.
-   if (AreFrameStatsEnabled())
+   // imports; without the flag it costs nothing and reports nothing. Gated separately from the
+   // frame-level stats: under owned scanout the profiler costs ~15 ms of CPU per frame on this
+   // driver, so 4kpGpuTimers alone must stay cheap enough to leave on during play.
+   if (AreFrameStatsEnabled() && g_pplayer->m_ptable->m_settings.GetStandalone_4kpGpuTimersPerPass())
       bgfx::setDebug(BGFX_DEBUG_PROFILER);
    #endif
 
@@ -2781,6 +2783,20 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       s_windowStartUs = nowUs;
    ++s_frames;
 
+   // Frame-to-frame spike tracking: an episodic stall ("slight delay at points") vanishes into a
+   // 5-second average, so keep the worst frame and count the outliers.
+   static uint64_t s_lastFrameUs = 0;
+   static uint64_t s_worstFrameUs = 0;
+   static uint32_t s_framesOver25Ms = 0;
+   if (s_lastFrameUs != 0)
+   {
+      const uint64_t delta = nowUs - s_lastFrameUs;
+      s_worstFrameUs = max(s_worstFrameUs, delta);
+      if (delta > 25000)
+         ++s_framesOver25Ms;
+   }
+   s_lastFrameUs = nowUs;
+
    // Per-view GPU times come from our bgfx patch (vpx-patches/bgfx-gles-timer-and-view-stats.patch):
    // upstream bgfx allocates the per-view result slots and never fills them, and on GLES its timer is
    // disabled outright because it looks for unsuffixed glQueryCounter rather than the EXT-suffixed
@@ -2854,6 +2870,10 @@ void RenderDevice::LogFrameStats(uint64_t submitUs, uint64_t presentUs)
       PLOGI.printf("[4kpDebug][gpu_timers] ===== %.1f fps over %u frames | frame %.2f ms = submit %.2f + present %.2f + other %.2f | gpu %.2f ms | %zu passes =====",
          double(s_frames) * 1000000.0 / double(nowUs - s_windowStartUs), s_frames,
          frameMs, submitMs, presentMs, frameMs - submitMs - presentMs, gpuMs, s_passes.size());
+      PLOGI.printf("[4kpDebug][gpu_timers]   frame spikes: worst %.1f ms, %u frames over 25 ms",
+         0.001 * double(s_worstFrameUs), s_framesOver25Ms);
+      s_worstFrameUs = 0;
+      s_framesOver25Ms = 0;
       // The GPU is busy for only part of the frame, so what bgfx::frame() spends beyond that is the
       // CPU issuing commands. These are the counts that cost drives.
       const double perFrame = double(s_frames ? s_frames : 1);
