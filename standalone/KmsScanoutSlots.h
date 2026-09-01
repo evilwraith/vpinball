@@ -271,6 +271,9 @@ public:
    }
 
    GLuint GetStagingTexture() const { return m_stagingTex; }
+   GLuint GetStagingFbo() const { return m_stagingFbo; }
+   uint32_t GetWidth() const { return m_width; }
+   uint32_t GetHeight() const { return m_height; }
 
    // One frame's pixels, staging -> imported slot. GL thread only. Returns false (and logs, first
    // few only) if the blit raised a GL error.

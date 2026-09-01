@@ -3021,7 +3021,17 @@ void RenderDevice::PumpBoundarySurface()
    static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
    const uint64_t tPump = usec();
    s_boundary.Init(m_boundaryPresenter->GetGbmDevice());
-   s_boundary.Pump();
+   // Feed the boundary the playfield's staging image so its swap carries REAL rendering -- the
+   // driver's fast-encode heuristic ignores a bare clear (see Pump).
+   unsigned int srcFbo = 0;
+   int srcW = 0, srcH = 0;
+   if (const VPX::Kms::ScanoutSlots* const slots = m_ownedScanout[0].slots.load(std::memory_order_relaxed))
+   {
+      srcFbo = slots->GetStagingFbo();
+      srcW = (int)slots->GetWidth();
+      srcH = (int)slots->GetHeight();
+   }
+   s_boundary.Pump(srcFbo, srcW, srcH);
    s_boundaryPumpUs += usec() - tPump;
 }
 #endif

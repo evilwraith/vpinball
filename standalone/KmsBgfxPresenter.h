@@ -381,7 +381,12 @@ public:
       }
 
       // Swap the boundary once. Saves and restores the thread's current surfaces around it.
-      void Pump()
+      // srcFbo (optional): a framebuffer holding this frame's real content; when given, its image
+      // is blitted (downscaled) into the boundary before the swap. The driver's fast-encode mode
+      // appears to require a surface that RECEIVES REAL RENDERING and swaps -- mixed mode's aux
+      // windows provided that and issuing dropped to 2.8-3.8 ms, while a bare 64x64 clear leaves
+      // the context in slow encode (~17 ms/frame paid at this swap).
+      void Pump(unsigned int srcFbo = 0, int srcW = 0, int srcH = 0)
       {
          if (m_surface == EGL_NO_SURFACE)
             return;
@@ -407,15 +412,29 @@ public:
          static void (*s_glClear)(unsigned int) = reinterpret_cast<void (*)(unsigned int)>(eglGetProcAddress("glClear"));
          static void (*s_glGetIntegerv)(unsigned int, int*)
             = reinterpret_cast<void (*)(unsigned int, int*)>(eglGetProcAddress("glGetIntegerv"));
+         static void (*s_glBlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned int, unsigned int)
+            = reinterpret_cast<void (*)(int, int, int, int, int, int, int, int, unsigned int, unsigned int)>(eglGetProcAddress("glBlitFramebuffer"));
          if (s_glBindFramebuffer != nullptr && s_glClear != nullptr && s_glGetIntegerv != nullptr)
          {
-            // FBO binding is CONTEXT state, and bgfx caches it -- restore exactly what was bound.
-            int prevFbo = 0;
-            s_glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &prevFbo);
-            s_glBindFramebuffer(0x8D40 /* GL_FRAMEBUFFER */, 0);
-            s_glClear(0x00004000 /* GL_COLOR_BUFFER_BIT */);
+            // FBO bindings are CONTEXT state, and bgfx caches them -- restore exactly what was bound.
+            int prevDrawFbo = 0, prevReadFbo = 0;
+            s_glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &prevDrawFbo);
+            s_glGetIntegerv(0x8CAA /* GL_READ_FRAMEBUFFER_BINDING */, &prevReadFbo);
+            if (srcFbo != 0 && srcW > 0 && srcH > 0 && s_glBlitFramebuffer != nullptr)
+            {
+               // Real content into the boundary: a downscaling blit of the frame image.
+               s_glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, srcFbo);
+               s_glBindFramebuffer(0x8CA9 /* GL_DRAW_FRAMEBUFFER */, 0);
+               s_glBlitFramebuffer(0, 0, srcW, srcH, 0, 0, 64, 64, 0x00004000 /* COLOR */, 0x2600 /* GL_NEAREST */);
+            }
+            else
+            {
+               s_glBindFramebuffer(0x8D40 /* GL_FRAMEBUFFER */, 0);
+               s_glClear(0x00004000 /* GL_COLOR_BUFFER_BIT */);
+            }
             eglSwapBuffers(m_dpy, m_surface);
-            s_glBindFramebuffer(0x8D40, (unsigned int)prevFbo);
+            s_glBindFramebuffer(0x8CA9, (unsigned int)prevDrawFbo);
+            s_glBindFramebuffer(0x8CA8, (unsigned int)prevReadFbo);
          }
          else
             eglSwapBuffers(m_dpy, m_surface);
