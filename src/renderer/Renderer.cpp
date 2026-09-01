@@ -1536,15 +1536,10 @@ void Renderer::DrawBulbLightBuffer()
       // mali-optimized.md par.7, ported from the 10.8.0 fork: this blur is the single hottest pass
       // in the bulb-light path. At the 4K panel's bloom-buffer res a 19x19 Gaussian is wildly
       // oversized for a soft halo -- 9x9 is visually identical and roughly halves blur bandwidth.
-      // Standalone/BulbBlurKernel (>0) overrides for on-device A/B without a rebuild.
-      float bulbBlurKernel = (m_renderWidth >= 3840) ? 9.f : 19.f;
-      const int bulbBlurOverride = m_table->m_settings.GetStandalone_BulbBlurKernel();
-      if (bulbBlurOverride > 0)
-         bulbBlurKernel = (float)bulbBlurOverride;
       m_renderDevice->DrawGaussianBlur(
          GetBloomBufferTexture(),
          GetBloomTmpBufferTexture(),
-         GetBloomBufferTexture(), bulbBlurKernel);
+         GetBloomBufferTexture(), (m_renderWidth >= 3840) ? 9.f : 19.f);
 #else
       m_renderDevice->DrawGaussianBlur(
          GetBloomBufferTexture(),
