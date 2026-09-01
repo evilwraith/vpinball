@@ -231,7 +231,8 @@ public:
    #endif
    #if defined(ENABLE_BGFX) && defined(__RK3588__)
    void PresentKmsWindows(); // VPX-owned DRM present; upstream has none on KMSDRM
-   void PumpBoundarySurface(); // libmali reclamation boundary; placement notes at the definition
+   void PumpBoundaryBegin(); // libmali reclamation boundary, phase A (queue content); notes at definition
+   void PumpBoundaryEnd(); // phase B (swap), after the commits
    VPX::Kms::WindowPresenter* m_boundaryPresenter = nullptr; // playfield presenter, set by PresentKmsWindows
    #endif
    void WaitForVSync(const bool asynchronous);

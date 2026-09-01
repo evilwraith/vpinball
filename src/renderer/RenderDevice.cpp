@@ -2388,10 +2388,10 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
    // bgfx reports as render thread time, so it has to be timed separately to be accounted for.
    const uint64_t tUploads = usec();
    // ST mode: the GL context is current on this thread (bgfx executed last frame's render here).
-   // Pump the reclamation boundary now, before this frame's GL work is issued, so its swap only
-   // waits out the previous frame's residue. See PumpBoundarySurface.
+   // Queue the boundary's content now, before this frame's GL work is issued; the matching swap
+   // happens after the commits (PumpBoundaryEnd, called from Flip after PresentKmsWindows).
    if (present && !m_bgfxMultithreaded)
-      PumpBoundarySurface();
+      PumpBoundaryBegin();
    #endif
    const uint32_t frameIdx = bgfx::frame(present ? BGFX_FRAME_NONE : BGFX_FRAME_FLUSH);
    #ifdef __RK3588__
@@ -2987,10 +2987,15 @@ void RenderDevice::PresentKmsWindows()
 
    // Publish the playfield presenter for the boundary pump. In MT mode this thread owns the GL
    // context for the whole frame, so pump here; in ST mode SubmitAndFlipFrame pumps BEFORE
-   // bgfx::frame() instead -- see PumpBoundarySurface for why placement is everything.
+   // bgfx::frame() instead -- see PumpBoundaryBegin for why placement is everything.
    m_boundaryPresenter = boundaryPresenter;
    if (m_bgfxMultithreaded)
-      PumpBoundarySurface();
+   {
+      PumpBoundaryBegin();
+      PumpBoundaryEnd();
+   }
+   else
+      PumpBoundaryEnd(); // phase B of the split armed in SubmitAndFlipFrame
 }
 
 // The driver reclamation boundary (see KmsBgfxPresenter BoundarySurface): without a real
@@ -3003,16 +3008,19 @@ void RenderDevice::PresentKmsWindows()
 // everything issued before it. Pumped after this frame's submission it drains the whole frame
 // (25.9 ms measured -- CPU and GPU fully serialized, 30 fps). Pumped BEFORE bgfx::frame() it only
 // waits out the previous frame's residue, which is near zero when the GPU beats the vblank.
-void RenderDevice::PumpBoundarySurface()
+static VPX::Kms::WindowPresenter::BoundarySurface s_boundarySurf;
+static bool s_pumpArmedThisFrame = false;
+
+// Phase A, before bgfx::frame() issues this frame's GL: queue the boundary's content so it
+// executes early in the frame's GPU window, and arm phase B. See BoundarySurface::PumpBegin for
+// why the split exists (the ~40 fps pacing limit cycle: the swap blocks on the boundary's own
+// queued ops, which used to sit behind the whole frame in the in-order queue).
+void RenderDevice::PumpBoundaryBegin()
 {
    if (m_boundaryPresenter == nullptr)
       return;
-   // Cadence (Standalone/4kpBoundaryPumpInterval): the countdown lives here so every caller
-   // honors it -- it was lost in the move from PresentKmsWindows once, which silently turned an
-   // interval-600 experiment into another every-frame run.
    // Threaded variant: pay the swap tax on a dedicated shared-context thread and skip the inline
-   // pump entirely. Whether a share-group sibling's swaps feed reclamation is the open question;
-   // rss over a few minutes answers it.
+   // pump entirely.
    static int s_pumpThread = -1;
    if (s_pumpThread < 0)
       s_pumpThread = (g_pplayer && g_pplayer->m_ptable
@@ -3031,11 +3039,11 @@ void RenderDevice::PumpBoundarySurface()
    if (--s_pumpCountdown != 0)
       return;
    s_pumpCountdown = s_pumpInterval;
-   static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
    const uint64_t tPump = usec();
-   s_boundary.Init(m_boundaryPresenter->GetGbmDevice());
+   s_boundarySurf.Init(m_boundaryPresenter->GetGbmDevice());
    // Feed the boundary the playfield's staging image so its swap carries REAL rendering -- the
-   // driver's fast-encode heuristic ignores a bare clear (see Pump).
+   // driver's fast-encode heuristic ignores a bare clear. At Begin time the staging still holds
+   // the PREVIOUS frame's image, which is exactly as real.
    unsigned int srcFbo = 0;
    int srcW = 0, srcH = 0;
    if (const VPX::Kms::ScanoutSlots* const slots = m_ownedScanout[0].slots.load(std::memory_order_relaxed))
@@ -3044,7 +3052,21 @@ void RenderDevice::PumpBoundarySurface()
       srcW = (int)slots->GetWidth();
       srcH = (int)slots->GetHeight();
    }
-   s_boundary.Pump(srcFbo, srcW, srcH);
+   s_boundarySurf.PumpBegin(srcFbo, srcW, srcH);
+   s_boundaryPumpUs += usec() - tPump;
+   s_pumpArmedThisFrame = true;
+}
+
+// Phase B, after the frame's commits: swap the boundary. Its content was queued at Begin and has
+// had the whole frame to execute, so a per-surface-dependency swap returns without draining the
+// frame's GL from the queue.
+void RenderDevice::PumpBoundaryEnd()
+{
+   if (!s_pumpArmedThisFrame)
+      return;
+   s_pumpArmedThisFrame = false;
+   const uint64_t tPump = usec();
+   s_boundarySurf.Pump();
    s_boundaryPumpUs += usec() - tPump;
 }
 #endif

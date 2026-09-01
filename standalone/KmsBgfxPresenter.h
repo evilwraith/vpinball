@@ -383,6 +383,28 @@ public:
          return true;
       }
 
+      // Two-phase pump, splitting the limit cycle that pinned frames at ~40 fps: the swap blocks
+      // until the boundary's own queued ops execute, and those sit behind the frame's GL in the
+      // in-order queue. Phase A (PumpBegin, frame start, before the frame's GL is issued) queues
+      // the boundary's clear/draw -- it executes early, during the frame's GPU window. Phase B
+      // (Pump, after the commits) swaps; if the driver blocks the swap only on the surface's own
+      // ops, they are long done and the block vanishes. If it drains the whole context queue
+      // regardless, this changes nothing and the measurement says so.
+      void PumpBegin(unsigned int srcFbo = 0, int srcW = 0, int srcH = 0)
+      {
+         if (m_surface == EGL_NO_SURFACE || m_beginArmed)
+            return;
+         EGLContext ctx = eglGetCurrentContext();
+         EGLSurface prevDraw = eglGetCurrentSurface(EGL_DRAW);
+         EGLSurface prevRead = eglGetCurrentSurface(EGL_READ);
+         if (eglMakeCurrent(m_dpy, m_surface, m_surface, ctx) != EGL_TRUE)
+            { Fail("eglMakeCurrent(boundary begin)"); return; }
+         QueueContent(srcFbo, srcW, srcH);
+         if (eglMakeCurrent(m_dpy, prevDraw, prevRead, ctx) != EGL_TRUE)
+            { Fail("eglMakeCurrent(restore begin)"); return; }
+         m_beginArmed = true;
+      }
+
       // Swap the boundary once. Saves and restores the thread's current surfaces around it.
       // srcFbo (optional): a framebuffer holding this frame's real content; when given, its image
       // is blitted (downscaled) into the boundary before the swap. The driver's fast-encode mode
@@ -408,51 +430,15 @@ public:
             eglSwapInterval(m_dpy, 0);
          }
          const uint64_t t1 = NowUs();
-         // Give the swap real work: an untouched back buffer can short-circuit the driver's
-         // frame-end path, and the frame-end path is the entire point of this surface.
-         static void (*s_glBindFramebuffer)(unsigned int, unsigned int)
-            = reinterpret_cast<void (*)(unsigned int, unsigned int)>(eglGetProcAddress("glBindFramebuffer"));
-         static void (*s_glClear)(unsigned int) = reinterpret_cast<void (*)(unsigned int)>(eglGetProcAddress("glClear"));
-         static void (*s_glGetIntegerv)(unsigned int, int*)
-            = reinterpret_cast<void (*)(unsigned int, int*)>(eglGetProcAddress("glGetIntegerv"));
-         static void (*s_glBlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned int, unsigned int)
-            = reinterpret_cast<void (*)(int, int, int, int, int, int, int, int, unsigned int, unsigned int)>(eglGetProcAddress("glBlitFramebuffer"));
-         if (s_glBindFramebuffer != nullptr && s_glClear != nullptr && s_glGetIntegerv != nullptr)
-         {
-            // FBO bindings are CONTEXT state, and bgfx caches them -- restore exactly what was bound.
-            int prevDrawFbo = 0, prevReadFbo = 0;
-            s_glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &prevDrawFbo);
-            s_glGetIntegerv(0x8CAA /* GL_READ_FRAMEBUFFER_BINDING */, &prevReadFbo);
-            if (srcFbo != 0 && srcW > 0 && srcH > 0 && s_glBlitFramebuffer != nullptr)
-            {
-               // Real content into the boundary: a downscaling blit of the frame image.
-               s_glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, srcFbo);
-               s_glBindFramebuffer(0x8CA9 /* GL_DRAW_FRAMEBUFFER */, 0);
-               s_glBlitFramebuffer(0, 0, srcW, srcH, 0, 0, 64, 64, 0x00004000 /* COLOR */, 0x2600 /* GL_NEAREST */);
-            }
-            else
-            {
-               s_glBindFramebuffer(0x8D40 /* GL_FRAMEBUFFER */, 0);
-               s_glClear(0x00004000 /* GL_COLOR_BUFFER_BIT */);
-            }
-            // A real DRAW into the surface, not just a blit/clear: the driver's fast-encode mode
-            // keyed on windows that receive actual draw calls in mixed mode (issuing 2.8-3.8 ms)
-            // while blits and clears left it in slow encode (~17-21 ms of deferred work paid at
-            // the first sync point). One buffer-less triangle per pump is the cheapest draw
-            // that can possibly qualify.
-            DrawToken();
-            // NO glFinish here. The diagnostic finish that once lived at this spot measured the
-            // whole story (finish 12-21 ms, swap-only 0.05 ms) and then WAS the story: nothing on
-            // the CPU needs GPU completion -- the commit's IN_FENCE_FD makes scanout wait GPU-side,
-            // and the swap itself queues without blocking. Waiting here serialized the pipeline.
-            const uint64_t tf1 = NowUs();
-            eglSwapBuffers(m_dpy, m_surface);
-            m_swapOnlyUs += NowUs() - tf1;
-            s_glBindFramebuffer(0x8CA9, (unsigned int)prevDrawFbo);
-            s_glBindFramebuffer(0x8CA8, (unsigned int)prevReadFbo);
-         }
-         else
-            eglSwapBuffers(m_dpy, m_surface);
+         if (!m_beginArmed)
+            QueueContent(srcFbo, srcW, srcH);
+         m_beginArmed = false;
+         // NO glFinish here. The diagnostic finish that once lived at this spot measured the
+         // whole story (finish 12-21 ms, swap-only 0.05 ms) and then WAS the story: nothing on
+         // the CPU needs GPU completion -- the commit's IN_FENCE_FD makes scanout wait GPU-side.
+         const uint64_t tf1 = NowUs();
+         eglSwapBuffers(m_dpy, m_surface);
+         m_swapOnlyUs += NowUs() - tf1;
          const uint64_t t2 = NowUs();
          // Recycle immediately so the 64x64 chain never runs dry; nothing scans it out.
          if (struct gbm_bo* bo = gbm_surface_lock_front_buffer(m_gbmSurface))
@@ -476,6 +462,42 @@ public:
       }
 
    private:
+      // Queue the boundary's per-frame content (blit of the frame image, or clear, plus the token
+      // draw for the fast-encode heuristic). Caller must have the boundary surface current.
+      void QueueContent(unsigned int srcFbo, int srcW, int srcH)
+      {
+         static void (*s_glBindFramebuffer)(unsigned int, unsigned int)
+            = reinterpret_cast<void (*)(unsigned int, unsigned int)>(eglGetProcAddress("glBindFramebuffer"));
+         static void (*s_glClear)(unsigned int) = reinterpret_cast<void (*)(unsigned int)>(eglGetProcAddress("glClear"));
+         static void (*s_glGetIntegerv)(unsigned int, int*)
+            = reinterpret_cast<void (*)(unsigned int, int*)>(eglGetProcAddress("glGetIntegerv"));
+         static void (*s_glBlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned int, unsigned int)
+            = reinterpret_cast<void (*)(int, int, int, int, int, int, int, int, unsigned int, unsigned int)>(eglGetProcAddress("glBlitFramebuffer"));
+         if (s_glBindFramebuffer == nullptr || s_glClear == nullptr || s_glGetIntegerv == nullptr)
+            return;
+         // FBO bindings are CONTEXT state, and bgfx caches them -- restore exactly what was bound.
+         int prevDrawFbo = 0, prevReadFbo = 0;
+         s_glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &prevDrawFbo);
+         s_glGetIntegerv(0x8CAA /* GL_READ_FRAMEBUFFER_BINDING */, &prevReadFbo);
+         if (srcFbo != 0 && srcW > 0 && srcH > 0 && s_glBlitFramebuffer != nullptr)
+         {
+            // Real content into the boundary: a downscaling blit of the frame image.
+            s_glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, srcFbo);
+            s_glBindFramebuffer(0x8CA9 /* GL_DRAW_FRAMEBUFFER */, 0);
+            s_glBlitFramebuffer(0, 0, srcW, srcH, 0, 0, 64, 64, 0x00004000 /* COLOR */, 0x2600 /* GL_NEAREST */);
+         }
+         else
+         {
+            s_glBindFramebuffer(0x8D40 /* GL_FRAMEBUFFER */, 0);
+            s_glClear(0x00004000 /* GL_COLOR_BUFFER_BIT */);
+         }
+         // A real DRAW into the surface, not just a blit/clear: the driver's fast-encode mode
+         // keyed on windows that receive actual draw calls in mixed mode.
+         DrawToken();
+         s_glBindFramebuffer(0x8CA9, (unsigned int)prevDrawFbo);
+         s_glBindFramebuffer(0x8CA8, (unsigned int)prevReadFbo);
+      }
+
       void Fail(const char* what)
       {
          if (!m_failed)
@@ -552,6 +574,7 @@ public:
       struct gbm_surface* m_gbmSurface = nullptr;
       bool m_failed = false;
       bool m_swapIntervalSet = false;
+      bool m_beginArmed = false; // PumpBegin queued this frame's content; Pump must not re-queue
       uint64_t m_mcInUs = 0, m_swapUs = 0, m_mcOutUs = 0, m_pumps = 0, m_lastSplitUs = 0;
       uint64_t m_finishUs = 0, m_swapOnlyUs = 0;
       unsigned int m_tokenProgram = 0;
