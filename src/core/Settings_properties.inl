@@ -1440,6 +1440,11 @@ PropBool(Standalone, 4kpOwnedScanout, "Owned scanout buffers"s,
 PropBool(Standalone, 4kpOwnedScanoutPlayfieldOnly, "Owned scanout: playfield only"s,
    "With owned scanout on, take over only the playfield window and leave the backglass/score "
    "view/topper on the normal swap path. RK3588 only, experimental."s, false);
+// mali-optimized.md par.7 ported: on-device A/B knob for the transmitted-light blur kernel.
+// 0 = platform default (9x9 at 4K, 19x19 below); >0 forces that kernel size.
+PropInt(Standalone, BulbBlurKernel, "Bulb blur kernel"s,
+   "Override the transmitted-light Gaussian blur kernel size (0 = platform default). "
+   "RK3588 only."s, 0, 39, 0);
 // The boundary pump (KmsBgfxPresenter BoundarySurface) is the fix for libmali's swapless GPU
 // mapping hoard (~4 GB file-rss at OOM kill). Reclamation does not need to run at frame rate, so
 // its cadence is tunable: 1 = every frame (proven flat), higher trades pump cost for reclamation

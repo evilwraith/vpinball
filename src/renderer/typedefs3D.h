@@ -116,6 +116,7 @@ enum colorFormat
    RGB10,
    RGB16F,
    RGB32F,
+   R11G11B10F, // RK3588: half-bandwidth positive-HDR format for the bloom/light ping-pong (mali-optimized.md par.3)
 
    SRGB,
    SRGB8,

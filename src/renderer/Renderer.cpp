@@ -196,11 +196,24 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
    DisableBallLighting(m_table->m_settings.GetPlayer_DisableLightingForBalls());
 
    // alloc bloom tex at 1/4 x 1/4 res (allows for simple HQ downscale of clipped input while saving memory)
-   m_pBloomBufferTexture = new RenderTarget(m_renderDevice, 
-      GetBackBufferTexture()->m_type, "BloomBuffer1"s, 
-      m_renderWidth / 4, m_renderHeight / 4, 
+#ifdef __RK3588__
+   // mali-optimized.md par.3, ported from the 10.8.0 fork: bloom/light content is positive HDR with
+   // no alpha, so R11G11B10F halves the per-texel bandwidth of the blur ping-pong (one of the
+   // hottest tile-bandwidth consumers on Mali-G610), and at 4K the buffer drops to 1/8 res --
+   // invisible for a soft halo, quarters the blur fragment count. Sub-4K keeps 1/4 unchanged.
+   const int bloomDiv = (m_renderWidth >= 3840) ? 8 : 4;
+   m_pBloomBufferTexture = new RenderTarget(m_renderDevice,
+      GetBackBufferTexture()->m_type, "BloomBuffer1"s,
+      m_renderWidth / bloomDiv, m_renderHeight / bloomDiv,
+      colorFormat::R11G11B10F,
+      false, 1, "Fatal Error: unable to create bloom buffer!");
+#else
+   m_pBloomBufferTexture = new RenderTarget(m_renderDevice,
+      GetBackBufferTexture()->m_type, "BloomBuffer1"s,
+      m_renderWidth / 4, m_renderHeight / 4,
       GetBackBufferTexture()->GetColorFormat(),
       false, 1, "Fatal Error: unable to create bloom buffer!");
+#endif
    m_pBloomTmpBufferTexture = m_pBloomBufferTexture->Duplicate("BloomBuffer2"s);
 
    std::shared_ptr<BaseTexture> ballTex = std::shared_ptr<BaseTexture>(BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "BallEnv.exr")));
@@ -1519,10 +1532,25 @@ void Renderer::DrawBulbLightBuffer()
    if (hasLight)
    { // Only apply blur if we have actually rendered some lights
       RenderPass* renderPass = m_renderDevice->GetCurrentPass();
+#ifdef __RK3588__
+      // mali-optimized.md par.7, ported from the 10.8.0 fork: this blur is the single hottest pass
+      // in the bulb-light path. At the 4K panel's bloom-buffer res a 19x19 Gaussian is wildly
+      // oversized for a soft halo -- 9x9 is visually identical and roughly halves blur bandwidth.
+      // Standalone/BulbBlurKernel (>0) overrides for on-device A/B without a rebuild.
+      float bulbBlurKernel = (m_renderWidth >= 3840) ? 9.f : 19.f;
+      const int bulbBlurOverride = m_table->m_settings.GetStandalone_BulbBlurKernel();
+      if (bulbBlurOverride > 0)
+         bulbBlurKernel = (float)bulbBlurOverride;
       m_renderDevice->DrawGaussianBlur(
-         GetBloomBufferTexture(), 
-         GetBloomTmpBufferTexture(), 
+         GetBloomBufferTexture(),
+         GetBloomTmpBufferTexture(),
+         GetBloomBufferTexture(), bulbBlurKernel);
+#else
+      m_renderDevice->DrawGaussianBlur(
+         GetBloomBufferTexture(),
+         GetBloomTmpBufferTexture(),
          GetBloomBufferTexture(), 19.f); // FIXME kernel size should depend on buffer resolution
+#endif
       RenderPass * const blurPass2 = m_renderDevice->GetCurrentPass();
       RenderPass * const blurPass1 = blurPass2->m_dependencies[0];
       constexpr float margin = 0.05f; // margin for the blur
@@ -2096,9 +2124,16 @@ void Renderer::UpdateBloom(RenderTarget* renderedRT)
    }
 
    m_renderDevice->DrawGaussianBlur(
-      GetBloomBufferTexture(), 
+      GetBloomBufferTexture(),
       GetBloomTmpBufferTexture(),
-      GetBloomBufferTexture(), 39.f); // FIXME kernel size should depend on buffer resolution
+      GetBloomBufferTexture(),
+#ifdef __RK3588__
+      // mali-optimized.md par.3: at the RK bloom-buffer res a 9x9 separable kernel covers the same
+      // panel-space halo the 39x39 did at stock res, at a fifth of the taps.
+      9.f);
+#else
+      39.f); // FIXME kernel size should depend on buffer resolution
+#endif
 
    if (g_pplayer->GetProfilingMode() == PF_ENABLED)
       m_gpu_profiler.Timestamp(GTS_Bloom);
