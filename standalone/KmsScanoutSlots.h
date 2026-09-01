@@ -238,8 +238,65 @@ public:
          }
       }
 
+      // Staging texture + read framebuffer: an ORDINARY GL texture bgfx renders the frame into
+      // (via overrideInternal), from which one glBlitFramebuffer per presented frame moves the
+      // pixels into the imported slot. This is the 10.8.0 KmsGbmProducer data path verbatim:
+      // nothing ever renders into an EGLImage sibling, and content enters it only as a blit
+      // destination -- bgfx::blit (glCopyImageSubData) into the sibling was refused by the blob
+      // (black panels), while glBlitFramebuffer between FBOs is its proven mechanism.
+      PLOGI << "[4kpDebug][owned_scanout] step: staging texture + fbo";
+      s_glGenTextures(1, &m_stagingTex);
+      s_glBindTexture(GL_TEXTURE_2D, m_stagingTex);
+      s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      s_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      s_glTexImage2D(GL_TEXTURE_2D, 0, 0x8058 /* GL_RGBA8 */, (GLsizei)width, (GLsizei)height, 0,
+         0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, nullptr);
+      s_glGenFramebuffers(1, &m_stagingFbo);
+      s_glBindFramebuffer(GL_FRAMEBUFFER, m_stagingFbo);
+      s_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_stagingTex, 0);
+      const GLenum stagingStatus = s_glCheckFramebufferStatus(GL_FRAMEBUFFER);
+      if (stagingStatus != GL_FRAMEBUFFER_COMPLETE)
+      {
+         error = "staging framebuffer incomplete (status 0x" + std::to_string(stagingStatus) + ')';
+         Destroy();
+         RestoreBindings(saved);
+         return false;
+      }
+
       RestoreBindings(saved);
       m_ready = true;
+      return true;
+   }
+
+   GLuint GetStagingTexture() const { return m_stagingTex; }
+
+   // One frame's pixels, staging -> imported slot. GL thread only. Returns false (and logs, first
+   // few only) if the blit raised a GL error.
+   bool BlitStagingToSlot(const int slotIdx)
+   {
+      if (!m_ready || m_stagingFbo == 0 || slotIdx < 0 || slotIdx >= kScanoutSlotCount)
+         return false;
+      const Slot& slot = m_slots[slotIdx];
+      GLint prevFbo = 0;
+      s_glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+      s_glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, m_stagingFbo);
+      s_glBindFramebuffer(0x8CA9 /* GL_DRAW_FRAMEBUFFER */, slot.fbo);
+      s_glBlitFramebuffer(0, 0, (GLint)m_width, (GLint)m_height, 0, 0, (GLint)m_width, (GLint)m_height,
+         0x00004000 /* GL_COLOR_BUFFER_BIT */, GL_NEAREST);
+      const GLenum err = s_glGetError();
+      s_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+      if (err != GL_NO_ERROR)
+      {
+         static int s_logged = 0;
+         if (s_logged < 3)
+         {
+            ++s_logged;
+            PLOGE.printf("[4kpDebug][owned_scanout] staging blit to slot %d FAILED (gl error 0x%04x)", slotIdx, err);
+         }
+         return false;
+      }
       return true;
    }
 
@@ -280,6 +337,12 @@ public:
             gbm_bo_destroy(slot.bo);
          slot = Slot {};
       }
+      if (m_stagingFbo != 0 && s_glDeleteFramebuffers != nullptr)
+         s_glDeleteFramebuffers(1, &m_stagingFbo);
+      if (m_stagingTex != 0 && s_glDeleteTextures != nullptr)
+         s_glDeleteTextures(1, &m_stagingTex);
+      m_stagingFbo = 0;
+      m_stagingTex = 0;
       if (s_glGetIntegerv != nullptr)
          RestoreBindings(saved);
       m_ready = false;
@@ -297,6 +360,8 @@ private:
    typedef GLenum (GL_APIENTRYP CheckFramebufferStatusFn)(GLenum);
    typedef void   (GL_APIENTRYP DeleteFramebuffersFn)(GLsizei, const GLuint*);
    typedef void   (GL_APIENTRYP GetIntegervFn)(GLenum, GLint*);
+   typedef void   (GL_APIENTRYP TexImage2DFn)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*);
+   typedef void   (GL_APIENTRYP BlitFramebufferFn)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
 
    struct GlBindings { GLint fbo = 0; GLint texture = 0; };
 
@@ -325,6 +390,8 @@ private:
    static inline CheckFramebufferStatusFn s_glCheckFramebufferStatus = nullptr;
    static inline DeleteFramebuffersFn s_glDeleteFramebuffers = nullptr;
    static inline GetIntegervFn s_glGetIntegerv = nullptr;
+   static inline TexImage2DFn s_glTexImage2D = nullptr;
+   static inline BlitFramebufferFn s_glBlitFramebuffer = nullptr;
 
    // eglGetProcAddress, not dlsym. libGLESv2.so.2 on this device is a ~5 KB stub that only pulls in
    // libmali.so.1 and exports none of GL itself; dlsym on its handle still resolves through the
@@ -348,13 +415,15 @@ private:
       s_glCheckFramebufferStatus = (CheckFramebufferStatusFn)eglGetProcAddress("glCheckFramebufferStatus");
       s_glDeleteFramebuffers = (DeleteFramebuffersFn)eglGetProcAddress("glDeleteFramebuffers");
       s_glGetIntegerv = (GetIntegervFn)eglGetProcAddress("glGetIntegerv");
+      s_glTexImage2D = (TexImage2DFn)eglGetProcAddress("glTexImage2D");
+      s_glBlitFramebuffer = (BlitFramebufferFn)eglGetProcAddress("glBlitFramebuffer");
 
       if (s_glGenTextures == nullptr || s_glBindTexture == nullptr
        || s_glDeleteTextures == nullptr || s_glGetError == nullptr
        || s_glTexParameteri == nullptr || s_glGenFramebuffers == nullptr
        || s_glBindFramebuffer == nullptr || s_glFramebufferTexture2D == nullptr
        || s_glCheckFramebufferStatus == nullptr || s_glDeleteFramebuffers == nullptr
-       || s_glGetIntegerv == nullptr)
+       || s_glGetIntegerv == nullptr || s_glTexImage2D == nullptr || s_glBlitFramebuffer == nullptr)
       {
          error = "eglGetProcAddress could not resolve the core GL entry points (needs "
                  "EGL_KHR_get_all_proc_addresses for non-extension functions)";
@@ -374,6 +443,7 @@ private:
    EGLDisplay m_display = EGL_NO_DISPLAY;
    PFNEGLDESTROYIMAGEKHRPROC m_destroyImage = nullptr;
    uint32_t m_width = 0, m_height = 0;
+   GLuint m_stagingTex = 0, m_stagingFbo = 0;
    int m_cursor = 0;
    bool m_ready = false;
 };

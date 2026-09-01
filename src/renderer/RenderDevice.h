@@ -181,6 +181,7 @@ public:
       // the extra frame of age the vendor VOP2 ISR requires, matching 10.8.0.
       bgfx::TextureHandle tex[4] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
       bgfx::FrameBufferHandle fb[4] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+      bgfx::TextureHandle stagingTex = BGFX_INVALID_HANDLE; // overridden to ScanoutSlots' ordinary staging GL texture
       class RenderTarget* rt[4] {};
       class RenderTarget* staging = nullptr; // ordinary RT the passes render into; blitted to the owned slot once per frame
       class RenderTarget* originalBackBuffer = nullptr; // kept so the fallback can restore it

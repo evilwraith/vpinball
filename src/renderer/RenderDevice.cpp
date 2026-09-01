@@ -2460,13 +2460,20 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, VPX::Window* wnd)
    {
       for (int i = 0; i < slots.Count(); ++i)
       {
-         own.tex[i] = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+         own.tex[i] = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
          if (!bgfx::isValid(own.tex[i]))
          {
             PLOGE.printf("[4kpDebug][owned_scanout] window %zu slot %d: createTexture2D failed", idx, i);
             own.bindStep = 2;
             return;
          }
+      }
+      own.stagingTex = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+      if (!bgfx::isValid(own.stagingTex))
+      {
+         PLOGE.printf("[4kpDebug][owned_scanout] window %zu: staging createTexture2D failed", idx);
+         own.bindStep = 2;
+         return;
       }
       own.bindStep = 1;
       return;
@@ -2486,6 +2493,11 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, VPX::Window* wnd)
       if (bound != uintptr_t(slot.texture))
          allTook = false;
    }
+   // The staging texture is ScanoutSlots' ordinary (non-imported) GL texture: bgfx renders the
+   // frame into it, and the present thread glBlitFramebuffers it into the imported slot before
+   // each commit -- the 10.8.0 KmsGbmProducer data path.
+   if (bgfx::overrideInternal(own.stagingTex, uintptr_t(slots.GetStagingTexture())) != uintptr_t(slots.GetStagingTexture()))
+      allTook = false;
    if (!allTook)
    {
       if (++own.bindAttempts < 16)
@@ -2539,35 +2551,29 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, VPX::Window* wnd)
          BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
 
    // The staging indirection is the 10.8.0 fork's proven shape (KmsGbmProducer: content enters the
-   // imported buffer through exactly one blit, never as a render target for scene passes). Render
-   // passes target this ordinary bgfx texture; UpdateOwnedScanout blits it into the owned slot as
-   // the frame's last GPU op. Rendering dozens of passes directly into an EGLImage sibling is what
-   // libmali mishandles: in mixed mode the dmabuf never received the content at all, and in full
-   // mode it cost a 17.5 ms/frame finalization stall at the boundary swap.
+   // imported buffer through exactly one glBlitFramebuffer, never as a render target for scene
+   // passes and never via glCopyImageSubData -- bgfx::blit into the sibling produced black panels
+   // on this blob). own.stagingTex was overridden above to ScanoutSlots' ordinary GL texture, so
+   // the present thread can source its blit from the matching GL FBO.
    {
-      const bgfx::TextureHandle stagingTex = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
       bgfx::FrameBufferHandle stagingFb = BGFX_INVALID_HANDLE;
-      bgfx::TextureHandle stagingDepth = BGFX_INVALID_HANDLE;
-      if (bgfx::isValid(stagingTex))
+      if (idx == 0)
       {
-         if (idx == 0)
+         const bgfx::TextureHandle stagingDepth = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+         if (bgfx::isValid(stagingDepth))
          {
-            stagingDepth = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
-            if (bgfx::isValid(stagingDepth))
-            {
-               bgfx::TextureHandle attachments[2] = { stagingTex, stagingDepth };
-               stagingFb = bgfx::createFrameBuffer(2, attachments, false);
-            }
+            bgfx::TextureHandle attachments[2] = { own.stagingTex, stagingDepth };
+            stagingFb = bgfx::createFrameBuffer(2, attachments, false);
          }
-         else
-            stagingFb = bgfx::createFrameBuffer(1, const_cast<bgfx::TextureHandle*>(&stagingTex), false);
       }
+      else
+         stagingFb = bgfx::createFrameBuffer(1, &own.stagingTex, false);
       if (!bgfx::isValid(stagingFb))
       {
          PLOGE.printf("[4kpDebug][owned_scanout] window %zu: staging target creation failed; staying on the EGL surface path", idx);
          return;
       }
-      own.staging = new RenderTarget(this, SurfaceType::RT_DEFAULT, stagingFb, stagingTex, bgfx::TextureFormat::BGRA8,
+      own.staging = new RenderTarget(this, SurfaceType::RT_DEFAULT, stagingFb, own.stagingTex, bgfx::TextureFormat::BGRA8,
          BGFX_INVALID_HANDLE, idx == 0 ? bgfx::TextureFormat::D24S8 : bgfx::TextureFormat::Count,
          "ScanoutStaging" + std::to_string(idx), wnd->GetPixelWidth(), wnd->GetPixelHeight(),
          BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
@@ -2639,14 +2645,9 @@ void RenderDevice::UpdateOwnedScanout()
       const uint32_t push = own.slotQPush.load(std::memory_order_relaxed);
       if (push - own.slotQPop.load(std::memory_order_acquire) >= sizeof(own.slotQ))
          continue; // present thread has stalled; do not wrap the ring
-      // One blit is the only GPU op that ever touches the imported buffer (the 10.8.0 shape).
-      // Encoded on the view AFTER the frame's last pass so it copies the completed frame; the
-      // slot still rotates so the display never latches a buffer mid-copy.
-      const bgfx::ViewId blitView = bgfx::ViewId(std::min<int>(m_activeViewId + 1 + int(i), 254));
-      bgfx::touch(blitView); // guarantee the view is visited so its blit cannot be skipped as trailing
-      bgfx::blit(blitView,
-         bgfx::TextureRegion(own.tex[own.slot], 0, 0, uint16_t(cur->GetWidth()), uint16_t(cur->GetHeight())),
-         bgfx::TextureRegion(cur->GetColorTexHandle(), 0, 0, uint16_t(cur->GetWidth()), uint16_t(cur->GetHeight())));
+      // The staging -> slot copy happens on the present thread (ScanoutSlots::BlitStagingToSlot),
+      // AFTER bgfx has executed this frame's GL and right before the commit. Only the slot index
+      // is handed over here; the slot still rotates so the display never latches mid-copy.
       own.slotQ[push % sizeof(own.slotQ)] = uint8_t(own.slot);
       own.slotQPush.store(push + 1, std::memory_order_release);
       own.slot = (own.slot + 1) % VPX::Kms::kScanoutSlotCount;
@@ -2905,6 +2906,11 @@ void RenderDevice::PresentKmsWindows()
             }
             const int slotIdx = own.slotQ[pop % sizeof(own.slotQ)];
             const VPX::Kms::ScanoutSlots::Slot& slot = own.slots.load(std::memory_order_relaxed)->GetSlot(slotIdx);
+            // Move the frame from the ordinary staging texture into the imported buffer -- the
+            // one GL op that ever writes a sibling (10.8.0 shape). This thread executed the
+            // frame's GL, so the blit is ordered after the rendering; the commit fence is minted
+            // after the blit, so scanout waits for it.
+            const_cast<VPX::Kms::ScanoutSlots*>(own.slots.load(std::memory_order_relaxed))->BlitStagingToSlot(slotIdx);
             // Only the playfield's drain may block: the three panels run three different refresh
             // clocks, and serially waiting on every CRTC's latch cost ~1.5 misaligned vblanks per
             // frame (38 fps with a 10 ms GPU). An ancillary commit that cannot land yet stays
