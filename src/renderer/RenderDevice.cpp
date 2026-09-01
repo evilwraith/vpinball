@@ -2460,7 +2460,7 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, VPX::Window* wnd)
    {
       for (int i = 0; i < slots.Count(); ++i)
       {
-         own.tex[i] = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+         own.tex[i] = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
          if (!bgfx::isValid(own.tex[i]))
          {
             PLOGE.printf("[4kpDebug][owned_scanout] window %zu slot %d: createTexture2D failed", idx, i);
@@ -2538,12 +2538,47 @@ void RenderDevice::BindOwnedScanoutToBgfx(const size_t idx, VPX::Window* wnd)
          "OwnedScanout" + std::to_string(idx) + '.' + std::to_string(i), wnd->GetPixelWidth(), wnd->GetPixelHeight(),
          BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
 
+   // The staging indirection is the 10.8.0 fork's proven shape (KmsGbmProducer: content enters the
+   // imported buffer through exactly one blit, never as a render target for scene passes). Render
+   // passes target this ordinary bgfx texture; UpdateOwnedScanout blits it into the owned slot as
+   // the frame's last GPU op. Rendering dozens of passes directly into an EGLImage sibling is what
+   // libmali mishandles: in mixed mode the dmabuf never received the content at all, and in full
+   // mode it cost a 17.5 ms/frame finalization stall at the boundary swap.
+   {
+      const bgfx::TextureHandle stagingTex = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+      bgfx::FrameBufferHandle stagingFb = BGFX_INVALID_HANDLE;
+      bgfx::TextureHandle stagingDepth = BGFX_INVALID_HANDLE;
+      if (bgfx::isValid(stagingTex))
+      {
+         if (idx == 0)
+         {
+            stagingDepth = bgfx::createTexture2D(w, h, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+            if (bgfx::isValid(stagingDepth))
+            {
+               bgfx::TextureHandle attachments[2] = { stagingTex, stagingDepth };
+               stagingFb = bgfx::createFrameBuffer(2, attachments, false);
+            }
+         }
+         else
+            stagingFb = bgfx::createFrameBuffer(1, const_cast<bgfx::TextureHandle*>(&stagingTex), false);
+      }
+      if (!bgfx::isValid(stagingFb))
+      {
+         PLOGE.printf("[4kpDebug][owned_scanout] window %zu: staging target creation failed; staying on the EGL surface path", idx);
+         return;
+      }
+      own.staging = new RenderTarget(this, SurfaceType::RT_DEFAULT, stagingFb, stagingTex, bgfx::TextureFormat::BGRA8,
+         BGFX_INVALID_HANDLE, idx == 0 ? bgfx::TextureFormat::D24S8 : bgfx::TextureFormat::Count,
+         "ScanoutStaging" + std::to_string(idx), wnd->GetPixelWidth(), wnd->GetPixelHeight(),
+         BGFXtoVPXTextureFormat(bgfx::TextureFormat::BGRA8));
+   }
+
    own.originalBackBuffer = wnd->GetBackBuffer();
    own.slot = 0;
-   own.rt[0]->RequestClear();
-   wnd->SetBackBuffer(own.rt[0], false);
+   own.staging->RequestClear();
+   wnd->SetBackBuffer(own.staging, false);
    own.active.store(true, std::memory_order_release);
-   PLOGI.printf("[4kpDebug][owned_scanout] window %zu redirected; cycling %d owned buffers", idx, slots.Count());
+   PLOGI.printf("[4kpDebug][owned_scanout] window %zu redirected via staging blit; cycling %d owned buffers", idx, slots.Count());
 }
 
 // bgfx API thread, once per frame after pass encoding and before bgfx::frame(): execute any
@@ -2594,24 +2629,29 @@ void RenderDevice::UpdateOwnedScanout()
                }
             }
       }
-      // The pending-clear flag is armed when a slot is handed out and consumed by the first pass
-      // that targets it, so a still-armed flag means nothing rendered into this buffer this frame
-      // (AncillaryFrameDivider skipped the window): keep it for the next frame, hand nothing to
+      // The pending-clear flag is armed when the frame's staging content is handed off and
+      // consumed by the first pass that targets the staging buffer, so a still-armed flag means
+      // nothing rendered this frame (AncillaryFrameDivider skipped the window): hand nothing to
       // the present thread, and it keeps scanning the last committed buffer.
-      RenderTarget* const cur = own.rt[own.slot];
+      RenderTarget* const cur = own.staging;
       if (cur == nullptr || cur->m_pendingClear)
          continue;
       const uint32_t push = own.slotQPush.load(std::memory_order_relaxed);
       if (push - own.slotQPop.load(std::memory_order_acquire) >= sizeof(own.slotQ))
          continue; // present thread has stalled; do not wrap the ring
+      // One blit is the only GPU op that ever touches the imported buffer (the 10.8.0 shape).
+      // Encoded on the view AFTER the frame's last pass so it copies the completed frame; the
+      // slot still rotates so the display never latches a buffer mid-copy.
+      const bgfx::ViewId blitView = bgfx::ViewId(std::min<int>(m_activeViewId + 1 + int(i), 254));
+      bgfx::blit(blitView,
+         bgfx::TextureRegion(own.tex[own.slot], 0, 0, uint16_t(cur->GetWidth()), uint16_t(cur->GetHeight())),
+         bgfx::TextureRegion(cur->GetColorTexHandle(), 0, 0, uint16_t(cur->GetWidth()), uint16_t(cur->GetHeight())));
       own.slotQ[push % sizeof(own.slotQ)] = uint8_t(own.slot);
       own.slotQPush.store(push + 1, std::memory_order_release);
-      // Rotate to the next buffer for the frame about to be built, so rendering never lands in
-      // the one just handed to the display. The buffer we are about to draw into still holds the
-      // frame from three frames ago.
       own.slot = (own.slot + 1) % VPX::Kms::kScanoutSlotCount;
-      own.rt[own.slot]->RequestClear();
-      m_outputWnd[i]->SetBackBuffer(own.rt[own.slot], false);
+      // Re-arm: consumed by next frame's first staging pass, read back here as the "did this
+      // window render" signal.
+      cur->RequestClear();
    }
 
    // In full mode, presentation is skipped once EVERY window is owned: eglSwapBuffers on any
@@ -2645,9 +2685,13 @@ bool RenderDevice::IsScanoutRenderTarget(const RenderTarget* const rt) const
       return false;
    for (const OwnedScanout& own : m_ownedScanout)
       if (own.active.load(std::memory_order_acquire))
+      {
+         if (own.staging == rt)
+            return true; // all scanout-bound passes render (flipped) into the staging target
          for (const RenderTarget* const slotRt : own.rt)
             if (slotRt == rt)
                return true;
+      }
    return false;
 }
 

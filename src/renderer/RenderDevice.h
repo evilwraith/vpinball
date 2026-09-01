@@ -182,6 +182,7 @@ public:
       bgfx::TextureHandle tex[4] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
       bgfx::FrameBufferHandle fb[4] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
       class RenderTarget* rt[4] {};
+      class RenderTarget* staging = nullptr; // ordinary RT the passes render into; blitted to the owned slot once per frame
       class RenderTarget* originalBackBuffer = nullptr; // kept so the fallback can restore it
       int slot = 0; // slot the NEXT built frame renders into; bgfx API thread only
       int bindStep = 0; // 0 create textures, 1 override + build framebuffers, 2 done; API thread only
