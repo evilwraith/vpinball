@@ -3010,6 +3010,19 @@ void RenderDevice::PumpBoundarySurface()
    // Cadence (Standalone/4kpBoundaryPumpInterval): the countdown lives here so every caller
    // honors it -- it was lost in the move from PresentKmsWindows once, which silently turned an
    // interval-600 experiment into another every-frame run.
+   // Threaded variant: pay the swap tax on a dedicated shared-context thread and skip the inline
+   // pump entirely. Whether a share-group sibling's swaps feed reclamation is the open question;
+   // rss over a few minutes answers it.
+   static int s_pumpThread = -1;
+   if (s_pumpThread < 0)
+      s_pumpThread = (g_pplayer && g_pplayer->m_ptable
+         && g_pplayer->m_ptable->m_settings.GetStandalone_4kpBoundaryPumpThread()) ? 1 : 0;
+   if (s_pumpThread != 0)
+   {
+      static VPX::Kms::WindowPresenter::BoundaryThread s_boundaryThread;
+      s_boundaryThread.Start(m_boundaryPresenter->GetGbmDevice());
+      return;
+   }
    static uint32_t s_pumpInterval = 0;
    if (s_pumpInterval == 0)
       s_pumpInterval = (g_pplayer && g_pplayer->m_ptable)

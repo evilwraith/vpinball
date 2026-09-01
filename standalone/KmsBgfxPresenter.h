@@ -30,9 +30,12 @@
 //      the display reads freed memory.
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <thread>
 #include <unistd.h>
 #include <poll.h>
 
@@ -432,7 +435,17 @@ public:
                s_glBindFramebuffer(0x8D40 /* GL_FRAMEBUFFER */, 0);
                s_glClear(0x00004000 /* GL_COLOR_BUFFER_BIT */);
             }
+            // Split the swap's cost into "waiting for the GL queue" vs "swap-internal work": a
+            // glFinish drains the queue first, so whatever the swap still costs afterwards is the
+            // driver's own doing, not a dependency wait.
+            static void (*s_glFinish)() = reinterpret_cast<void (*)()>(eglGetProcAddress("glFinish"));
+            const uint64_t tf0 = NowUs();
+            if (s_glFinish != nullptr)
+               s_glFinish();
+            const uint64_t tf1 = NowUs();
             eglSwapBuffers(m_dpy, m_surface);
+            m_finishUs += tf1 - tf0;
+            m_swapOnlyUs += NowUs() - tf1;
             s_glBindFramebuffer(0x8CA9, (unsigned int)prevDrawFbo);
             s_glBindFramebuffer(0x8CA8, (unsigned int)prevReadFbo);
          }
@@ -452,10 +465,11 @@ public:
          if (t3 - m_lastSplitUs > 5000000ull && m_pumps > 0)
          {
             m_lastSplitUs = t3;
-            PLOGI.printf("[4kpDebug][owned_scanout] boundary pump split: mcIn %.2f ms, clear+swap %.2f ms, recycle+mcOut %.2f ms (%llu pumps)",
+            PLOGI.printf("[4kpDebug][owned_scanout] boundary pump split: mcIn %.2f ms, clear+swap %.2f ms (finish %.2f, swap-only %.2f), recycle+mcOut %.2f ms (%llu pumps)",
                0.001 * double(m_mcInUs) / double(m_pumps), 0.001 * double(m_swapUs) / double(m_pumps),
+               0.001 * double(m_finishUs) / double(m_pumps), 0.001 * double(m_swapOnlyUs) / double(m_pumps),
                0.001 * double(m_mcOutUs) / double(m_pumps), (unsigned long long)m_pumps);
-            m_mcInUs = m_swapUs = m_mcOutUs = 0; m_pumps = 0;
+            m_mcInUs = m_swapUs = m_mcOutUs = m_finishUs = m_swapOnlyUs = 0; m_pumps = 0;
          }
       }
 
@@ -479,6 +493,84 @@ public:
       bool m_failed = false;
       bool m_swapIntervalSet = false;
       uint64_t m_mcInUs = 0, m_swapUs = 0, m_mcOutUs = 0, m_pumps = 0, m_lastSplitUs = 0;
+      uint64_t m_finishUs = 0, m_swapOnlyUs = 0;
+   };
+
+   // Threaded boundary: pay the driver's swap tax on a dedicated thread with its own SHARED EGL
+   // context, so the render thread never blocks on it. Whether reclamation and the deferred
+   // frame work can be flushed from a share-group sibling context is exactly the open question
+   // this exists to answer (Standalone/4kpBoundaryPumpThread) -- if rss balloons or the render
+   // thread's costs are unchanged, the answer is no and it comes back out.
+   class BoundaryThread final
+   {
+   public:
+      // Call from the GL-owning thread: captures the display, the context (for sharing) and its
+      // config, then runs the pump loop on its own thread at ~60 Hz.
+      bool Start(struct gbm_device* dev)
+      {
+         if (m_thread.joinable() || dev == nullptr)
+            return m_thread.joinable();
+         EGLDisplay dpy = eglGetCurrentDisplay();
+         EGLContext mainCtx = eglGetCurrentContext();
+         if (dpy == EGL_NO_DISPLAY || mainCtx == EGL_NO_CONTEXT)
+            return false;
+         EGLint cfgId = 0;
+         if (eglQueryContext(dpy, mainCtx, EGL_CONFIG_ID, &cfgId) != EGL_TRUE)
+            return false;
+         const EGLint attrs[] = { EGL_CONFIG_ID, cfgId, EGL_NONE };
+         EGLConfig cfg = nullptr;
+         EGLint n = 0;
+         if (eglChooseConfig(dpy, attrs, &cfg, 1, &n) != EGL_TRUE || n == 0)
+            return false;
+         const EGLint ctxAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+         EGLContext ctx = eglCreateContext(dpy, cfg, mainCtx, ctxAttrs);
+         if (ctx == EGL_NO_CONTEXT)
+         {
+            PLOGE.printf("[4kpDebug][owned_scanout] boundary thread: shared eglCreateContext failed (0x%04x)", eglGetError());
+            return false;
+         }
+         struct gbm_surface* gs = gbm_surface_create(dev, 64, 64, GBM_FORMAT_ARGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+         EGLSurface surf = gs != nullptr ? eglCreateWindowSurface(dpy, cfg, (EGLNativeWindowType)gs, nullptr) : EGL_NO_SURFACE;
+         if (surf == EGL_NO_SURFACE)
+         {
+            PLOGE << "[4kpDebug][owned_scanout] boundary thread: surface creation failed";
+            eglDestroyContext(dpy, ctx);
+            return false;
+         }
+         m_stop.store(false, std::memory_order_relaxed);
+         m_thread = std::thread([this, dpy, ctx, surf, gs]() {
+            if (eglMakeCurrent(dpy, surf, surf, ctx) != EGL_TRUE)
+            {
+               PLOGE.printf("[4kpDebug][owned_scanout] boundary thread: makeCurrent failed (0x%04x)", eglGetError());
+               return;
+            }
+            eglSwapInterval(dpy, 0);
+            static void (*t_glClear)(unsigned int) = reinterpret_cast<void (*)(unsigned int)>(eglGetProcAddress("glClear"));
+            PLOGI << "[4kpDebug][owned_scanout] boundary thread up: shared-context 64x64 swap loop";
+            while (!m_stop.load(std::memory_order_relaxed))
+            {
+               if (t_glClear != nullptr)
+                  t_glClear(0x00004000);
+               eglSwapBuffers(dpy, surf);
+               if (struct gbm_bo* bo = gbm_surface_lock_front_buffer(gs))
+                  gbm_surface_release_buffer(gs, bo);
+               std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            }
+            eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+         });
+         return true;
+      }
+      void Stop()
+      {
+         if (!m_thread.joinable())
+            return;
+         m_stop.store(true, std::memory_order_relaxed);
+         m_thread.join();
+      }
+      ~BoundaryThread() { Stop(); }
+   private:
+      std::thread m_thread;
+      std::atomic<bool> m_stop { false };
    };
 
    void ProbeOwnedScanout()

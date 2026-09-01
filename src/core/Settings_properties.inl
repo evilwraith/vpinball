@@ -1455,6 +1455,12 @@ PropBool(Standalone, 4kpSiblingRefresh, "Owned scanout: per-frame sibling refres
 // Diagnostic for the mixed-mode shadow-sync theory: force full GL completion every frame before
 // the owned commits. Expensive (serializes CPU and GPU); exists to prove or kill the theory that
 // libmali only syncs EGLImage-sibling backing to the dmabuf during slow-path frame finalization.
+// Experimental: run the boundary pump on a dedicated thread with a shared EGL context so the
+// render thread never pays the ~17 ms swap tax. Open question: whether a share-group sibling's
+// swaps feed the driver's reclamation and deferred work; rss and fps answer it on device.
+PropBool(Standalone, 4kpBoundaryPumpThread, "Owned scanout: threaded boundary pump"s,
+   "Pay the driver boundary swap on a dedicated shared-context thread instead of the render "
+   "thread. RK3588 only, experimental."s, false);
 PropBool(Standalone, 4kpScanoutFinish, "Owned scanout: glFinish per frame"s,
    "Force full GL completion before owned scanout commits. Diagnostic; costs frame time. "
    "RK3588 only."s, false);
