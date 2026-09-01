@@ -441,16 +441,12 @@ public:
             // the first sync point). One buffer-less triangle per pump is the cheapest draw
             // that can possibly qualify.
             DrawToken();
-            // Split the swap's cost into "waiting for the GL queue" vs "swap-internal work": a
-            // glFinish drains the queue first, so whatever the swap still costs afterwards is the
-            // driver's own doing, not a dependency wait.
-            static void (*s_glFinish)() = reinterpret_cast<void (*)()>(eglGetProcAddress("glFinish"));
-            const uint64_t tf0 = NowUs();
-            if (s_glFinish != nullptr)
-               s_glFinish();
+            // NO glFinish here. The diagnostic finish that once lived at this spot measured the
+            // whole story (finish 12-21 ms, swap-only 0.05 ms) and then WAS the story: nothing on
+            // the CPU needs GPU completion -- the commit's IN_FENCE_FD makes scanout wait GPU-side,
+            // and the swap itself queues without blocking. Waiting here serialized the pipeline.
             const uint64_t tf1 = NowUs();
             eglSwapBuffers(m_dpy, m_surface);
-            m_finishUs += tf1 - tf0;
             m_swapOnlyUs += NowUs() - tf1;
             s_glBindFramebuffer(0x8CA9, (unsigned int)prevDrawFbo);
             s_glBindFramebuffer(0x8CA8, (unsigned int)prevReadFbo);
