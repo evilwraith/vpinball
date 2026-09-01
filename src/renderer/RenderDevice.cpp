@@ -3007,6 +3007,17 @@ void RenderDevice::PumpBoundarySurface()
 {
    if (m_boundaryPresenter == nullptr)
       return;
+   // Cadence (Standalone/4kpBoundaryPumpInterval): the countdown lives here so every caller
+   // honors it -- it was lost in the move from PresentKmsWindows once, which silently turned an
+   // interval-600 experiment into another every-frame run.
+   static uint32_t s_pumpInterval = 0;
+   if (s_pumpInterval == 0)
+      s_pumpInterval = (g_pplayer && g_pplayer->m_ptable)
+         ? (uint32_t)clamp(g_pplayer->m_ptable->m_settings.GetStandalone_4kpBoundaryPumpInterval(), 1, 600) : 1;
+   static uint32_t s_pumpCountdown = 1;
+   if (--s_pumpCountdown != 0)
+      return;
+   s_pumpCountdown = s_pumpInterval;
    static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
    const uint64_t tPump = usec();
    s_boundary.Init(m_boundaryPresenter->GetGbmDevice());
