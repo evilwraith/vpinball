@@ -1452,6 +1452,12 @@ PropInt(Standalone, 4kpBoundaryPumpInterval, "Boundary pump interval"s,
 // the mixed-mode balloon (fresh private backing per re-target). Off = re-target only at pool init.
 PropBool(Standalone, 4kpSiblingRefresh, "Owned scanout: per-frame sibling refresh"s,
    "Re-target the owned scanout textures to their EGLImages every frame. RK3588 only."s, true);
+// Diagnostic for the mixed-mode shadow-sync theory: force full GL completion every frame before
+// the owned commits. Expensive (serializes CPU and GPU); exists to prove or kill the theory that
+// libmali only syncs EGLImage-sibling backing to the dmabuf during slow-path frame finalization.
+PropBool(Standalone, 4kpScanoutFinish, "Owned scanout: glFinish per frame"s,
+   "Force full GL completion before owned scanout commits. Diagnostic; costs frame time. "
+   "RK3588 only."s, false);
 // Diagnostic lever: playfield-only owned scanout loses the statically prerendered content (the
 // playfield mesh and baked lighting) while full-owned and EGL modes keep it. Re-rendering statics
 // every frame splits retention-lost from rendering-broken in one run.

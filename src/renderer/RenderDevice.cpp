@@ -2670,6 +2670,25 @@ void RenderDevice::PresentKmsWindows()
       static void (*s_glFlush)() = reinterpret_cast<void (*)()>(eglGetProcAddress("glFlush"));
       if (s_glFlush != nullptr)
          s_glFlush();
+      // Shadow-sync diagnostic (mixed-mode frozen playfield): the working theory is that libmali
+      // shadows EGLImage-sibling render targets and only syncs the private backing to the dmabuf
+      // during its slow-path frame finalization -- which fast-path swaps (mixed mode) never run.
+      // A full glFinish forces completion of everything; if the panel comes alive with this on,
+      // the theory is proven and the fix becomes finding a cheaper finalization kick.
+      static int s_scanoutFinish = -1;
+      if (s_scanoutFinish < 0)
+         s_scanoutFinish = (g_pplayer && g_pplayer->m_ptable
+            && g_pplayer->m_ptable->m_settings.GetStandalone_4kpScanoutFinish()) ? 1 : 0;
+      if (s_scanoutFinish != 0)
+      {
+         static void (*s_glFinish)() = reinterpret_cast<void (*)()>(eglGetProcAddress("glFinish"));
+         if (s_glFinish != nullptr)
+         {
+            const uint64_t tFin = usec();
+            s_glFinish();
+            s_boundaryPumpUs += usec() - tFin; // reuse the pump counter so the cost shows in the stats split
+         }
+      }
       // Stage probe (rate-limited): read the scene texture back to see whether the dynamic content
       // (ball, flashers) is ever rendered into it -- the one measurement that splits "scene draws
       // do not execute" from "a later stage samples something stale". bgfx::readTexture completes
