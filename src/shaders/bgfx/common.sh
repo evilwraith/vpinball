@@ -526,3 +526,17 @@ vec3 rotate_to_vector_upper(const vec3 vec, const vec3 normal)
 	const vec3 spherePoint = vec3(sqrt(1.0 - uv.y * uv.y) * vec2(ct, st), uv.y);
 	return normal + spherePoint;
 }*/
+
+// mali-optimized.md par.2 (10.8.0 fork port): pow() lowers to exp2(log2(x)*y) -- two
+// transcendentals per fragment -- on Mali Valhall, and the light falloff runs once per fragment
+// per lit bulb. Almost every table uses an integer falloff power (the VPX default is 2.0);
+// branch to exact multiplies for 1..4 and keep pow() for the rest. Exact match for the integer
+// powers, so no visual tradeoff on any platform.
+float fast_falloff(const float x, const float p)
+{
+	if (p < 1.5) return x;
+	if (p < 2.5) return x * x;
+	if (p < 3.5) { float x2 = x * x; return x2 * x; }
+	if (p < 4.5) { float x2 = x * x; return x2 * x2; }
+	return pow(x, p);
+}

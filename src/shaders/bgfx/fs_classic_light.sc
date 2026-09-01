@@ -92,7 +92,7 @@ EARLY_DEPTH_STENCIL void main()
     BRANCH if (lightColor_intensity.w != 0.0)
     {
         const float len = length(lightCenter_maxRange.xyz - v_tablePos) * lightCenter_maxRange.w;
-        const float atten = pow(1.0 - saturate(len), lightColor2_falloff_power.w);
+        const float atten = fast_falloff(1.0 - saturate(len), lightColor2_falloff_power.w);
         const vec3 lcolor = mix(lightColor2_falloff_power.rgb, lightColor_intensity.rgb, sqrt(len));
         color += vec4(lcolor*(atten*lightColor_intensity.w), saturate(atten*lightColor_intensity.w));
         #ifdef TEX
