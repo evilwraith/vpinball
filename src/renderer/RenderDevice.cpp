@@ -2387,6 +2387,11 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
    // The texture upload loop above sits inside the measured submit phase but outside the window
    // bgfx reports as render thread time, so it has to be timed separately to be accounted for.
    const uint64_t tUploads = usec();
+   // ST mode: the GL context is current on this thread (bgfx executed last frame's render here).
+   // Pump the reclamation boundary now, before this frame's GL work is issued, so its swap only
+   // waits out the previous frame's residue. See PumpBoundarySurface.
+   if (present && !m_bgfxMultithreaded)
+      PumpBoundarySurface();
    #endif
    const uint32_t frameIdx = bgfx::frame(present ? BGFX_FRAME_NONE : BGFX_FRAME_FLUSH);
    #ifdef __RK3588__
@@ -2894,28 +2899,33 @@ void RenderDevice::PresentKmsWindows()
       presenter.Present();
    }
 
-   // The driver reclamation boundary (see BoundarySurface): without a real eglSwapBuffers somewhere
-   // on this context, libmali's per-frame GPU mappings accumulate without bound (~4 GB file-rss at
-   // OOM kill, on every owned build ever measured; a per-frame pump measured rss flat at 4.4 GB over
-   // a full session). Pumped AFTER the commits so any GPU sync the surface switch forces cannot
-   // delay this frame's flip, and on a cadence: reclamation does not need to run at frame rate.
-   if (boundaryPresenter != nullptr)
-   {
-      static uint32_t s_pumpInterval = 0;
-      if (s_pumpInterval == 0)
-         s_pumpInterval = (g_pplayer && g_pplayer->m_ptable)
-            ? (uint32_t)clamp(g_pplayer->m_ptable->m_settings.GetStandalone_4kpBoundaryPumpInterval(), 1, 600) : 1;
-      static uint32_t s_pumpCountdown = 1;
-      if (--s_pumpCountdown == 0)
-      {
-         s_pumpCountdown = s_pumpInterval;
-         static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
-         const uint64_t tPump = usec();
-         s_boundary.Init(boundaryPresenter->GetGbmDevice());
-         s_boundary.Pump();
-         s_boundaryPumpUs += usec() - tPump;
-      }
-   }
+   // Publish the playfield presenter for the boundary pump. In MT mode this thread owns the GL
+   // context for the whole frame, so pump here; in ST mode SubmitAndFlipFrame pumps BEFORE
+   // bgfx::frame() instead -- see PumpBoundarySurface for why placement is everything.
+   m_boundaryPresenter = boundaryPresenter;
+   if (m_bgfxMultithreaded)
+      PumpBoundarySurface();
+}
+
+// The driver reclamation boundary (see KmsBgfxPresenter BoundarySurface): without a real
+// eglSwapBuffers somewhere on this context, libmali's per-frame GPU mappings accumulate without
+// bound (~4 GB file-rss at OOM kill, on every owned build ever measured; a per-frame pump measured
+// rss flat at 4.4 GB over a full session, and every-8th-frame pumping leaked ~8 MB/s to a 6.3 GB
+// OOM, so the cadence stays at every frame).
+//
+// Placement is the entire cost model: the GPU queue is in-order, so the boundary swap waits for
+// everything issued before it. Pumped after this frame's submission it drains the whole frame
+// (25.9 ms measured -- CPU and GPU fully serialized, 30 fps). Pumped BEFORE bgfx::frame() it only
+// waits out the previous frame's residue, which is near zero when the GPU beats the vblank.
+void RenderDevice::PumpBoundarySurface()
+{
+   if (m_boundaryPresenter == nullptr)
+      return;
+   static VPX::Kms::WindowPresenter::BoundarySurface s_boundary;
+   const uint64_t tPump = usec();
+   s_boundary.Init(m_boundaryPresenter->GetGbmDevice());
+   s_boundary.Pump();
+   s_boundaryPumpUs += usec() - tPump;
 }
 #endif
 

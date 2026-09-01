@@ -67,7 +67,7 @@ public:
 };
 
 #if defined(ENABLE_BGFX) && defined(__RK3588__)
-namespace VPX::Kms { class ScanoutSlots; }
+namespace VPX::Kms { class ScanoutSlots; class WindowPresenter; }
 #endif
 
 class RenderDevice final
@@ -229,6 +229,8 @@ public:
    #endif
    #if defined(ENABLE_BGFX) && defined(__RK3588__)
    void PresentKmsWindows(); // VPX-owned DRM present; upstream has none on KMSDRM
+   void PumpBoundarySurface(); // libmali reclamation boundary; placement notes at the definition
+   VPX::Kms::WindowPresenter* m_boundaryPresenter = nullptr; // playfield presenter, set by PresentKmsWindows
    #endif
    void WaitForVSync(const bool asynchronous);
    float GetVisualLatency() const; // Average delay between when the frame is prepared and when it will be viewed by the player (including TV/display/headset latency)
