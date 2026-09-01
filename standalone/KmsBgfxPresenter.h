@@ -435,6 +435,12 @@ public:
                s_glBindFramebuffer(0x8D40 /* GL_FRAMEBUFFER */, 0);
                s_glClear(0x00004000 /* GL_COLOR_BUFFER_BIT */);
             }
+            // A real DRAW into the surface, not just a blit/clear: the driver's fast-encode mode
+            // keyed on windows that receive actual draw calls in mixed mode (issuing 2.8-3.8 ms)
+            // while blits and clears left it in slow encode (~17-21 ms of deferred work paid at
+            // the first sync point). One buffer-less triangle per pump is the cheapest draw
+            // that can possibly qualify.
+            DrawToken();
             // Split the swap's cost into "waiting for the GL queue" vs "swap-internal work": a
             // glFinish drains the queue first, so whatever the swap still costs afterwards is the
             // driver's own doing, not a dependency wait.
@@ -487,6 +493,64 @@ public:
          clock_gettime(CLOCK_MONOTONIC, &ts);
          return uint64_t(ts.tv_sec) * 1000000ull + uint64_t(ts.tv_nsec) / 1000ull;
       }
+
+      // One buffer-less triangle into FBO 0 of the current (boundary) surface. All touched GL
+      // state is saved and restored -- bgfx caches program, viewport and enables.
+      void DrawToken()
+      {
+         typedef unsigned int (*CreateShaderFn)(unsigned int);
+         typedef void (*ShaderSourceFn)(unsigned int, int, const char* const*, const int*);
+         typedef void (*CompileShaderFn)(unsigned int);
+         typedef unsigned int (*CreateProgramFn)();
+         typedef void (*AttachShaderFn)(unsigned int, unsigned int);
+         typedef void (*LinkProgramFn)(unsigned int);
+         typedef void (*UseProgramFn)(unsigned int);
+         typedef void (*DrawArraysFn)(unsigned int, int, int);
+         typedef void (*ViewportFn)(int, int, int, int);
+         typedef void (*GetIntegervFn)(unsigned int, int*);
+         typedef unsigned char (*IsEnabledFn)(unsigned int);
+         typedef void (*EnableFn)(unsigned int);
+         typedef void (*DisableFn)(unsigned int);
+         static auto createShader = (CreateShaderFn)eglGetProcAddress("glCreateShader");
+         static auto shaderSource = (ShaderSourceFn)eglGetProcAddress("glShaderSource");
+         static auto compileShader = (CompileShaderFn)eglGetProcAddress("glCompileShader");
+         static auto createProgram = (CreateProgramFn)eglGetProcAddress("glCreateProgram");
+         static auto attachShader = (AttachShaderFn)eglGetProcAddress("glAttachShader");
+         static auto linkProgram = (LinkProgramFn)eglGetProcAddress("glLinkProgram");
+         static auto useProgram = (UseProgramFn)eglGetProcAddress("glUseProgram");
+         static auto drawArrays = (DrawArraysFn)eglGetProcAddress("glDrawArrays");
+         static auto viewport = (ViewportFn)eglGetProcAddress("glViewport");
+         static auto getIntegerv = (GetIntegervFn)eglGetProcAddress("glGetIntegerv");
+         static auto isEnabled = (IsEnabledFn)eglGetProcAddress("glIsEnabled");
+         static auto enable = (EnableFn)eglGetProcAddress("glEnable");
+         static auto disable = (DisableFn)eglGetProcAddress("glDisable");
+         if (createShader == nullptr || useProgram == nullptr || drawArrays == nullptr || getIntegerv == nullptr)
+            return;
+         if (m_tokenProgram == 0)
+         {
+            const char* vs = "#version 300 es\nvoid main(){vec2 p=vec2(float(gl_VertexID<<1&2),float(gl_VertexID&2));gl_Position=vec4(p*2.-1.,0.,1.);}";
+            const char* fs = "#version 300 es\nprecision mediump float;out vec4 c;void main(){c=vec4(0.25,0.5,0.75,1.);}";
+            const unsigned int v = createShader(0x8B31 /* VERTEX */), f = createShader(0x8B30 /* FRAGMENT */);
+            shaderSource(v, 1, &vs, nullptr); compileShader(v);
+            shaderSource(f, 1, &fs, nullptr); compileShader(f);
+            m_tokenProgram = createProgram();
+            attachShader(m_tokenProgram, v); attachShader(m_tokenProgram, f);
+            linkProgram(m_tokenProgram);
+         }
+         int prevProgram = 0, prevViewport[4] = {};
+         getIntegerv(0x8B8D /* GL_CURRENT_PROGRAM */, &prevProgram);
+         getIntegerv(0x0BA2 /* GL_VIEWPORT */, prevViewport);
+         const bool hadScissor = isEnabled(0x0C11) != 0, hadDepth = isEnabled(0x0B71) != 0, hadCull = isEnabled(0x0B44) != 0;
+         disable(0x0C11 /* SCISSOR */); disable(0x0B71 /* DEPTH_TEST */); disable(0x0B44 /* CULL_FACE */);
+         useProgram(m_tokenProgram);
+         viewport(0, 0, 64, 64);
+         drawArrays(0x0004 /* TRIANGLES */, 0, 3);
+         useProgram((unsigned int)prevProgram);
+         viewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+         if (hadScissor) enable(0x0C11);
+         if (hadDepth) enable(0x0B71);
+         if (hadCull) enable(0x0B44);
+      }
       EGLDisplay m_dpy = EGL_NO_DISPLAY;
       EGLSurface m_surface = EGL_NO_SURFACE;
       struct gbm_surface* m_gbmSurface = nullptr;
@@ -494,6 +558,7 @@ public:
       bool m_swapIntervalSet = false;
       uint64_t m_mcInUs = 0, m_swapUs = 0, m_mcOutUs = 0, m_pumps = 0, m_lastSplitUs = 0;
       uint64_t m_finishUs = 0, m_swapOnlyUs = 0;
+      unsigned int m_tokenProgram = 0;
    };
 
    // Threaded boundary: pay the driver's swap tax on a dedicated thread with its own SHARED EGL
