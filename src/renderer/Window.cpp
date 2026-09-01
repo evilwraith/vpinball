@@ -27,15 +27,33 @@ float GetEffectiveBackBufferScale(const Settings& settings, const int panelWidth
    if (scale >= 1.0f || scale <= 0.0f)
       return 1.0f;
 
-   if (!VP::Machine::IsFourKPlayfield(panelWidth) && !settings.GetStandalone_ForceBackBufferScale())
-   {
-      PLOGI << "BackBufferScale=" << scale << " ignored: the " << panelWidth
-            << "px-wide playfield is not 4K, so it would render below 1080p and upscale. "
-               "Set Standalone/ForceBackBufferScale to honour it anyway.";
-      return 1.0f;
-   }
+   // ForceBackBufferScale bypasses the normalization below: the value is taken as a raw fraction
+   // of the attached panel. Diagnostic use only -- shared cabinet inis rely on the normalization.
+   if (settings.GetStandalone_ForceBackBufferScale())
+      return scale;
 
-   return scale;
+   // Ported from the 10.8.0 fork: the cabinets share one config ini, and its BackBufferScale
+   // table names absolute resolutions against the 4K reference panel -- 0.5 means "1920x1080",
+   // not "half of whatever is attached". Taken literally that renders 960x540 on the HDP's 1080p
+   // playfield, so resolve the value to the resolution it names and re-express it against the
+   // real panel. On the ALP4K this is the identity; on the HDP everything from 1920x1080 up
+   // lands on native.
+   constexpr int REFERENCE_WIDTH = 3840;
+   const int targetWidth = (int)((double)REFERENCE_WIDTH * (double)scale + 0.5);
+   float effectiveScale = (float)targetWidth / (float)panelWidth;
+   if (effectiveScale > 1.0f)
+      effectiveScale = 1.0f;
+   else if (effectiveScale < 0.25f)
+      effectiveScale = 0.25f; // VOP2's scaler tops out at 4x
+   static bool logged = false;
+   if (!logged)
+   {
+      logged = true;
+      PLOGI.printf("BackBufferScale=%.4f selects %dpx-wide render; panel is %dpx -> effective scale %.4f%s",
+         scale, targetWidth, panelWidth, effectiveScale,
+         effectiveScale == 1.0f ? " (native -- requested resolution is at or above this panel)" : "");
+   }
+   return effectiveScale;
 }
 }
 
