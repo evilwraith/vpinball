@@ -2817,7 +2817,18 @@ void RenderDevice::PresentKmsWindows()
             // into the owned framebuffers (GL_INVALID_FRAMEBUFFER_OPERATION). Cheap, and it runs
             // before the next frame's draws are issued. const_cast: the pointer is stored const
             // for the commit path, but the slots object is ours and this thread owns the context.
-            const_cast<VPX::Kms::ScanoutSlots*>(own.slots.load(std::memory_order_relaxed))->RefreshImageBindings();
+            // The per-frame sibling re-target is itself a suspect in mixed mode: the 2026-09-01
+            // run showed draws still dropped WITH it running (committed buffers read zero), while
+            // rss ballooned at ~60 allocations/s and GPU time tripled -- consistent with libmali
+            // giving the texture fresh private backing on every re-target after a surface switch
+            // instead of rebinding the dmabuf. Full-owned (no surface switches) is flat with it
+            // on, so default stays on; the setting exists to split heal from disease on device.
+            static int s_siblingRefresh = -1;
+            if (s_siblingRefresh < 0)
+               s_siblingRefresh = (g_pplayer && g_pplayer->m_ptable
+                  && g_pplayer->m_ptable->m_settings.GetStandalone_4kpSiblingRefresh()) ? 1 : 0;
+            if (s_siblingRefresh != 0)
+               const_cast<VPX::Kms::ScanoutSlots*>(own.slots.load(std::memory_order_relaxed))->RefreshImageBindings();
             // The driver reclamation boundary pumps after the commit loop -- see end of function.
             if (wndIdx == 0)
                boundaryPresenter = &presenter;
@@ -2860,16 +2871,21 @@ void RenderDevice::PresentKmsWindows()
                      if (s_glBindFramebuffer && s_glReadPixels)
                      {
                         constexpr unsigned int GL_FRAMEBUFFER_ = 0x8D40, GL_RGBA_ = 0x1908, GL_UNSIGNED_BYTE_ = 0x1401;
+                        static unsigned int (*s_glCheckFramebufferStatus)(unsigned int)
+                           = reinterpret_cast<unsigned int (*)(unsigned int)>(eglGetProcAddress("glCheckFramebufferStatus"));
                         uint32_t px[4] = {};
                         const int w = wnd->GetPixelWidth(), h = wnd->GetPixelHeight();
                         s_glBindFramebuffer(GL_FRAMEBUFFER_, slot.fbo);
+                        // 0x8CD5 = GL_FRAMEBUFFER_COMPLETE. Anything else names the drop mechanism:
+                        // an incomplete attachment here means the imported sibling lost its storage.
+                        const unsigned int fboStatus = s_glCheckFramebufferStatus ? s_glCheckFramebufferStatus(GL_FRAMEBUFFER_) : 0;
                         s_glReadPixels(w / 2, h / 2, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[0]);
                         s_glReadPixels(w / 4, h / 4, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[1]);
                         s_glReadPixels(3 * w / 4, h / 4, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[2]);
                         s_glReadPixels(w / 2, 3 * h / 4, 1, 1, GL_RGBA_, GL_UNSIGNED_BYTE_, &px[3]);
                         s_glBindFramebuffer(GL_FRAMEBUFFER_, 0);
-                        PLOGI.printf("[4kpDebug][owned_probe] content slot %d fb %u: %08x %08x %08x %08x",
-                           slotIdx, slot.fbId, px[0], px[1], px[2], px[3]);
+                        PLOGI.printf("[4kpDebug][owned_probe] content slot %d fb %u: %08x %08x %08x %08x | fbo status 0x%04x",
+                           slotIdx, slot.fbId, px[0], px[1], px[2], px[3], fboStatus);
                      }
                   }
                   own.slotQPop.store(pop + 1, std::memory_order_release);

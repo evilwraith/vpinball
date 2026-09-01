@@ -1447,6 +1447,11 @@ PropBool(Standalone, 4kpOwnedScanoutPlayfieldOnly, "Owned scanout: playfield onl
 PropInt(Standalone, 4kpBoundaryPumpInterval, "Boundary pump interval"s,
    "Pump the driver reclamation boundary surface every N frames under owned scanout. "
    "RK3588 only."s, 1, 600, 1);
+// The per-frame EGLImage sibling re-target (ScanoutSlots::RefreshImageBindings) was added to heal
+// orphaned imports after ancillary swapchain surface switches, but is itself suspected of causing
+// the mixed-mode balloon (fresh private backing per re-target). Off = re-target only at pool init.
+PropBool(Standalone, 4kpSiblingRefresh, "Owned scanout: per-frame sibling refresh"s,
+   "Re-target the owned scanout textures to their EGLImages every frame. RK3588 only."s, true);
 // Diagnostic lever: playfield-only owned scanout loses the statically prerendered content (the
 // playfield mesh and baked lighting) while full-owned and EGL modes keep it. Re-rendering statics
 // every frame splits retention-lost from rendering-broken in one run.
