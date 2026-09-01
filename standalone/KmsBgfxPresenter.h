@@ -388,8 +388,18 @@ public:
          EGLContext ctx = eglGetCurrentContext();
          EGLSurface prevDraw = eglGetCurrentSurface(EGL_DRAW);
          EGLSurface prevRead = eglGetCurrentSurface(EGL_READ);
+         const uint64_t t0 = NowUs();
          if (eglMakeCurrent(m_dpy, m_surface, m_surface, ctx) != EGL_TRUE)
             { Fail("eglMakeCurrent(boundary)"); return; }
+         if (!m_swapIntervalSet)
+         {
+            // Interval 0, explicitly: with the default interval 1 the blob may throttle this chain
+            // (block until a previous swap is "consumed" -- and nothing ever consumes it), which
+            // would put a fixed multi-ms stall in a swap whose GPU work is a 64x64 clear.
+            m_swapIntervalSet = true;
+            eglSwapInterval(m_dpy, 0);
+         }
+         const uint64_t t1 = NowUs();
          // Give the swap real work: an untouched back buffer can short-circuit the driver's
          // frame-end path, and the frame-end path is the entire point of this surface.
          static void (*s_glBindFramebuffer)(unsigned int, unsigned int)
@@ -409,11 +419,25 @@ public:
          }
          else
             eglSwapBuffers(m_dpy, m_surface);
+         const uint64_t t2 = NowUs();
          // Recycle immediately so the 64x64 chain never runs dry; nothing scans it out.
          if (struct gbm_bo* bo = gbm_surface_lock_front_buffer(m_gbmSurface))
             gbm_surface_release_buffer(m_gbmSurface, bo);
          if (eglMakeCurrent(m_dpy, prevDraw, prevRead, ctx) != EGL_TRUE)
             Fail("eglMakeCurrent(restore)");
+         const uint64_t t3 = NowUs();
+         // Phase split, once per ~5 s: which of the four steps carries the pump's cost. The three
+         // candidates behave differently -- makeCurrent(boundary) = context drain, swap = chain
+         // throttle or clear-completion wait, makeCurrent(restore) = surface reload.
+         m_mcInUs += t1 - t0; m_swapUs += t2 - t1; m_mcOutUs += t3 - t2; ++m_pumps;
+         if (t3 - m_lastSplitUs > 5000000ull && m_pumps > 0)
+         {
+            m_lastSplitUs = t3;
+            PLOGI.printf("[4kpDebug][owned_scanout] boundary pump split: mcIn %.2f ms, clear+swap %.2f ms, recycle+mcOut %.2f ms (%llu pumps)",
+               0.001 * double(m_mcInUs) / double(m_pumps), 0.001 * double(m_swapUs) / double(m_pumps),
+               0.001 * double(m_mcOutUs) / double(m_pumps), (unsigned long long)m_pumps);
+            m_mcInUs = m_swapUs = m_mcOutUs = 0; m_pumps = 0;
+         }
       }
 
    private:
@@ -424,10 +448,18 @@ public:
          m_failed = true;
          m_surface = EGL_NO_SURFACE;
       }
+      static uint64_t NowUs()
+      {
+         struct timespec ts;
+         clock_gettime(CLOCK_MONOTONIC, &ts);
+         return uint64_t(ts.tv_sec) * 1000000ull + uint64_t(ts.tv_nsec) / 1000ull;
+      }
       EGLDisplay m_dpy = EGL_NO_DISPLAY;
       EGLSurface m_surface = EGL_NO_SURFACE;
       struct gbm_surface* m_gbmSurface = nullptr;
       bool m_failed = false;
+      bool m_swapIntervalSet = false;
+      uint64_t m_mcInUs = 0, m_swapUs = 0, m_mcOutUs = 0, m_pumps = 0, m_lastSplitUs = 0;
    };
 
    void ProbeOwnedScanout()
