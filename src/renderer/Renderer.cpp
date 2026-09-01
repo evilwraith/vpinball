@@ -3460,14 +3460,13 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
    if (output.GetMode() == VPX::RenderOutput::OM_WINDOW
       && !g_pplayer->m_liveUI->m_inGameUI.IsOpened(s_displaySettingsPages[window]))
    {
-      // In playfield-only owned mode the ancillary swap chains are what feed libmali its frame
-      // boundary: without a periodic eglSwapBuffers the driver drops into its slow encode mode and
-      // leaks until the OOM killer fires (measured: table 123, whose aux windows rarely update,
-      // ran at 40 fps in this mode while TAF's active backglass held 60). So the divider must not
-      // starve them -- every aux window renders and swaps every frame here.
-      const bool auxSwapIsDriverBoundary = m_table->m_settings.GetStandalone_4kpOwnedScanout()
-         && m_table->m_settings.GetStandalone_4kpOwnedScanoutPlayfieldOnly();
-      const int divider = auxSwapIsDriverBoundary ? 1 : m_table->m_settings.GetStandalone_AncillaryFrameDivider();
+      // The playfield-only bypass that forced divider 1 here is gone: the reclamation boundary it
+      // fed is owned by RenderDevice's BoundarySurface pump now, and forcing an aux render (and
+      // therefore an EGL surface switch inside the frame) EVERY frame is under investigation as
+      // the mechanism that poisons the playfield FBO passes that follow the switch (mixed-mode
+      // black playfield, 2026-09-01). With the divider live, frames that skip every aux window
+      // have no pre-playfield surface switch at all -- the split that names the culprit.
+      const int divider = m_table->m_settings.GetStandalone_AncillaryFrameDivider();
       if (divider > 1 && ((m_ancillaryFrameCounter + static_cast<uint64_t>(window)) % static_cast<uint64_t>(divider)) != 0)
       {
          m_ancillaryWndSkips++;

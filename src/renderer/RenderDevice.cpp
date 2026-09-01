@@ -2643,6 +2643,7 @@ void RenderDevice::UpdateOwnedScanout()
       // Encoded on the view AFTER the frame's last pass so it copies the completed frame; the
       // slot still rotates so the display never latches a buffer mid-copy.
       const bgfx::ViewId blitView = bgfx::ViewId(std::min<int>(m_activeViewId + 1 + int(i), 254));
+      bgfx::touch(blitView); // guarantee the view is visited so its blit cannot be skipped as trailing
       bgfx::blit(blitView,
          bgfx::TextureRegion(own.tex[own.slot], 0, 0, uint16_t(cur->GetWidth()), uint16_t(cur->GetHeight())),
          bgfx::TextureRegion(cur->GetColorTexHandle(), 0, 0, uint16_t(cur->GetWidth()), uint16_t(cur->GetHeight())));
