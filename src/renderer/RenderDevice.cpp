@@ -2917,9 +2917,21 @@ void RenderDevice::PresentKmsWindows()
             // queued and is retried next frame; its previous buffer remains on scanout.
             if (wndIdx == 0)
             {
+               // Mailbox, not FIFO: with fenced commits the latch happens a vblank after the GPU
+               // finishes, and BLOCKING for it self-limited the loop to the 42-48 fps band. If the
+               // display is still busy with the previous flip, keep the slot queued and retry next
+               // frame -- the render loop free-runs and the display latches whatever is newest,
+               // exactly the aux windows' semantics.
                const uint64_t tDrain = usec();
-               const bool ok = presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight());
+               const VPX::Kms::WindowPresenter::OwnedPresentResult pr
+                  = presenter.PresentOwnedFbIfIdle(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight());
                s_drainWaitUs += usec() - tDrain;
+               if (pr == VPX::Kms::WindowPresenter::OwnedPresentResult::Busy)
+               {
+                  s_pfQueueEmpty += 0; // no-op; busy skips are visible as commit-count dips
+                  continue; // deferred, retry next frame; previous buffer stays on scanout
+               }
+               const bool ok = pr == VPX::Kms::WindowPresenter::OwnedPresentResult::Committed;
                if (ok)
                {
                   s_pfCommits++; // frozen-playfield probe
@@ -3029,7 +3041,14 @@ void RenderDevice::PumpBoundaryBegin()
    {
       static VPX::Kms::WindowPresenter::BoundaryThread s_boundaryThread;
       s_boundaryThread.Start(m_boundaryPresenter->GetGbmDevice());
-      return;
+      // Hybrid: the thread's shared-context swaps keep the floor from running away but reclaim
+      // only partially (measured: ~1 GB higher steady-state than inline, ~3 MB/s creep early).
+      // One inline pump every 120 frames -- a ~13 ms hiccup every 2 s -- gives the driver a real
+      // main-context boundary to fully reclaim at.
+      static uint32_t s_hybridCountdown = 120;
+      if (--s_hybridCountdown != 0)
+         return;
+      s_hybridCountdown = 120;
    }
    static uint32_t s_pumpInterval = 0;
    if (s_pumpInterval == 0)
