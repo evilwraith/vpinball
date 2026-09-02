@@ -38,6 +38,14 @@ double MaxTheoreticRadiation(const unsigned int year, const double rlat);
 double SunsetSunriseLocalTime(const unsigned int day, const unsigned int month, const unsigned int year, const double rlong, const double rlat, const bool sunrise);
 
 
+#ifdef __RK3588__
+// Vblank period in usec for the [4kpDebug][frame_pacing] histogram; 0 disables it. Set at player
+// start (player.cpp) from Standalone/4kpGpuTimers, so the pacing view and the frame stats share a
+// switch. Ported from the 10.8.0 fork (rk3588-frame-pacing-stutter.md): per-second windows,
+// buckets in vblank multiples, worst frame carries its section breakdown.
+extern unsigned int g_framePacingLogVblankUsec;
+#endif
+
 class FrameProfiler final
 {
 public:
@@ -143,6 +151,58 @@ public:
       }
    }
 
+#ifdef __RK3588__
+   // Per-second frame-pacing window (10.8.0 port). Buckets are multiples of the vblank period, so
+   // the reading is "how many frames missed a flip". The worst frame in each window carries its
+   // section breakdown, which is the part that identifies the cause: a stutter landing in flip is
+   // present pacing / GPU wall (flip ABSORBS slack -- do not rank by it, see the doc), one landing
+   // in script/misc/physics is CPU-side.
+   void AccumulateFramePacing(unsigned int frameLength)
+   {
+      const unsigned int vblank = g_framePacingLogVblankUsec;
+      if (vblank == 0)
+         return;
+      if (m_pacingWindowStartUsec == 0)
+         m_pacingWindowStartUsec = m_profileTimeStamp;
+      const unsigned int bucket = frameLength <= (vblank * 108) / 100 ? 0
+                                : frameLength <= (vblank * 3) / 2     ? 1
+                                : frameLength <= (vblank * 21) / 10   ? 2
+                                : frameLength <= vblank * 3           ? 3
+                                                                      : 4;
+      m_pacingBuckets[bucket]++;
+      m_pacingFrames++;
+      if (bucket >= 2)
+         m_pacingStutters++;
+      if (frameLength > m_pacingWorstLength)
+      {
+         m_pacingWorstLength = frameLength;
+         memcpy(m_pacingWorstData, m_profileData[m_profileIndex], sizeof(m_pacingWorstData));
+      }
+      if (m_profileTimeStamp - m_pacingWindowStartUsec < 1000000ull)
+         return;
+      // Only worth a line when something was late; a clean second is the common case.
+      if (m_pacingStutters > 0 || m_pacingBuckets[1] > 0)
+      {
+         PLOGI.printf("[4kpDebug][frame_pacing] frames=%u stutters=%u (%.1f%%) buckets ontime=%u late=%u drop1=%u drop2=%u worse=%u "
+                      "worst=%.1fms [misc=%.1f script=%.1f physics=%.1f prepare=%.1f wait=%.1f submit=%.1f flip=%.1f sleep=%.1f]",
+            m_pacingFrames, m_pacingStutters, m_pacingFrames ? (100.0 * m_pacingStutters / m_pacingFrames) : 0.0,
+            m_pacingBuckets[0], m_pacingBuckets[1], m_pacingBuckets[2], m_pacingBuckets[3], m_pacingBuckets[4],
+            m_pacingWorstLength * 1e-3,
+            m_pacingWorstData[PROFILE_MISC] * 1e-3, m_pacingWorstData[PROFILE_SCRIPT] * 1e-3,
+            m_pacingWorstData[PROFILE_PHYSICS] * 1e-3, m_pacingWorstData[PROFILE_PREPARE_FRAME] * 1e-3,
+            (m_pacingWorstData[PROFILE_RENDER_WAIT] + m_pacingWorstData[PROFILE_RENDER_WAIT_SC]) * 1e-3,
+            m_pacingWorstData[PROFILE_RENDER_SUBMIT] * 1e-3, m_pacingWorstData[PROFILE_RENDER_FLIP] * 1e-3,
+            (m_pacingWorstData[PROFILE_SLEEP] + m_pacingWorstData[PROFILE_RENDER_SLEEP]) * 1e-3);
+      }
+      memset(m_pacingBuckets, 0, sizeof(m_pacingBuckets));
+      memset(m_pacingWorstData, 0, sizeof(m_pacingWorstData));
+      m_pacingFrames = 0;
+      m_pacingStutters = 0;
+      m_pacingWorstLength = 0;
+      m_pacingWindowStartUsec = m_profileTimeStamp;
+   }
+#endif
+
    void NewFrame(uint32_t gametime)
    {
       // assert(m_threadLock == std::this_thread::get_id()); // Not asserted as NewFrame happens in a critical section (guarded by frameMutex)
@@ -153,6 +213,11 @@ public:
       if (m_frameIndex > 0)
       {
          m_profileData[m_profileIndex][PROFILE_FRAME] = static_cast<unsigned int>(m_profileTimeStamp - m_frameTimeStamp);
+#ifdef __RK3588__
+         // m_profileData[m_profileIndex] is the frame that just ended, sections and all, so the
+         // pacing window can snapshot it before the index advances.
+         AccumulateFramePacing(m_profileData[m_profileIndex][PROFILE_FRAME]);
+#endif
       }
 
       // Processed asynchronously here since input events are from game logic thread while present events are from rendering thread
@@ -478,6 +543,14 @@ public:
    }
 
 private:
+#ifdef __RK3588__
+   uint64_t m_pacingWindowStartUsec = 0;
+   unsigned int m_pacingBuckets[5] = {};
+   unsigned int m_pacingWorstData[PROFILE_COUNT] = {};
+   unsigned int m_pacingWorstLength = 0;
+   unsigned int m_pacingFrames = 0;
+   unsigned int m_pacingStutters = 0;
+#endif
    constexpr static unsigned int N_SAMPLES = 1000; // Number of samples to store. Must be kept quite high to be able to do a 1s sliding average (so at 1000FPS, needs 100 samples)
    constexpr static unsigned int N_WORST = 10; // Number of longest frames to keep detailed profile timing
    constexpr static unsigned int STACK_SIZE = 100;

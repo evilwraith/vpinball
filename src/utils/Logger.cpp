@@ -145,6 +145,115 @@ public:
    }
 };
 
+
+#ifdef __RK3588__
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
+
+// Ported from the 10.8.0 fork (f999bf3f0): vpinball.log lives on the cart's ntfs-3g (fuseblk)
+// mount, and plog's appenders write synchronously under a process-wide mutex -- every PLOG line is
+// a userspace round-trip through the same FUSE daemon that streams PuP video off the same disk.
+// Measured there as 60-80 ms frame stalls tracking log bursts. The formatted line is built on the
+// calling thread (CPU-only, cheap); this formatter hands it to the downstream RollingFileAppender
+// untouched so its rolling logic still applies.
+struct PreformattedFormatter
+{
+   static plog::util::nstring header() { return plog::util::nstring(); }
+   static plog::util::nstring format(const plog::Record& record) { return record.getMessage(); }
+};
+
+// Formats on the calling thread, queues the finished line, and lets one writer thread own the file
+// and stdout. Bounded queue: when the disk stalls long enough to fill it, lines are DROPPED and
+// counted rather than ever blocking a frame -- "nothing blocks the frame" outranks log
+// completeness.
+class AsyncLogAppender final : public plog::IAppender
+{
+public:
+   AsyncLogAppender(plog::RollingFileAppender<PreformattedFormatter>* fileSink, const bool alsoStdout)
+      : m_fileSink(fileSink)
+      , m_stdout(alsoStdout)
+      , m_thread(&AsyncLogAppender::ThreadMain, this)
+   {
+   }
+
+   ~AsyncLogAppender() override
+   {
+      {
+         std::lock_guard<std::mutex> guard(m_mutex);
+         m_quit = true;
+      }
+      m_cv.notify_one();
+      if (m_thread.joinable())
+         m_thread.join();
+   }
+
+   void write(const plog::Record& record) PLOG_OVERRIDE
+   {
+      plog::util::nstring line = ThreadAwareTxtFormatter<false>::format(record);
+      {
+         std::lock_guard<std::mutex> guard(m_mutex);
+         if (m_queue.size() >= kMaxQueuedLines)
+         {
+            ++m_dropped;
+            return;
+         }
+         m_queue.emplace_back(std::move(line));
+      }
+      m_cv.notify_one();
+   }
+
+private:
+   static constexpr size_t kMaxQueuedLines = 16384;
+
+   void ThreadMain()
+   {
+      std::deque<plog::util::nstring> batch;
+      for (;;)
+      {
+         size_t dropped = 0;
+         {
+            std::unique_lock<std::mutex> guard(m_mutex);
+            m_cv.wait(guard, [this]() { return m_quit || !m_queue.empty(); });
+            batch.swap(m_queue);
+            dropped = m_dropped;
+            m_dropped = 0;
+            if (m_quit && batch.empty())
+               return;
+         }
+         if (dropped > 0)
+            batch.emplace_back("[AsyncLogAppender] dropped " + std::to_string(dropped) + " line(s) while the log disk was stalled\n");
+         for (const plog::util::nstring& line : batch)
+            Emit(line);
+         if (m_stdout)
+            fflush(stdout);
+         batch.clear();
+      }
+   }
+
+   void Emit(const plog::util::nstring& line)
+   {
+      // Rebuild a minimal Record whose message is the finished line; PreformattedFormatter passes
+      // it straight through, keeping the file appender's size-based rolling.
+      plog::Record record(plog::info, "", 0, "", nullptr, PLOG_DEFAULT_INSTANCE_ID);
+      record << line;
+      m_fileSink->write(record);
+      if (m_stdout)
+         fwrite(line.data(), 1, line.size(), stdout);
+   }
+
+   plog::RollingFileAppender<PreformattedFormatter>* const m_fileSink;
+   const bool m_stdout;
+   std::mutex m_mutex;
+   std::condition_variable m_cv;
+   std::deque<plog::util::nstring> m_queue;
+   size_t m_dropped = 0;
+   bool m_quit = false;
+   std::thread m_thread;
+};
+#endif
+
 Logger* Logger::m_pInstance = nullptr;
 
 Logger* Logger::GetInstance()
@@ -165,7 +274,16 @@ void Logger::SetupLogger(const bool enable)
       {
          initialized = true;
          const std::filesystem::path logPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "vpinball.log");
-#if PLOG_CHAR_IS_UTF8
+#if defined(__RK3588__)
+         // Both the file (ntfs-3g FUSE) and stdout are written by AsyncLogAppender's writer
+         // thread; no game thread ever touches the disk for a log line. Construction order
+         // matters: rawFileAppender must outlive fileAppender (function-local statics are
+         // destroyed in reverse order), so the shutdown drain still has a live sink. 25 MB x2:
+         // the launcher environment has been observed deleting vpinball.log.1 after exit, so the
+         // primary file must be big enough for a whole session on its own.
+         static plog::RollingFileAppender<PreformattedFormatter> rawFileAppender(logPath.string().c_str(), 1024 * 1024 * 25, 2);
+         static AsyncLogAppender fileAppender(&rawFileAppender, true);
+#elif PLOG_CHAR_IS_UTF8
          static plog::RollingFileAppender<ThreadAwareTxtFormatter<false>> fileAppender(logPath.string().c_str(), 1024 * 1024 * 5, 1);
 #else
          static plog::RollingFileAppender<ThreadAwareTxtFormatter<false>> fileAppender(logPath.wstring().c_str(), 1024 * 1024 * 5, 1);
@@ -176,7 +294,11 @@ void Logger::SetupLogger(const bool enable)
          plog::Logger<PLOG_NO_DBG_OUT_INSTANCE_ID>::getInstance()->addAppender(&fileAppender);
 
 #ifdef __STANDALONE__
-#ifndef __ANDROID__
+#if defined(__RK3588__)
+         // stdout is written by AsyncLogAppender's writer thread (colors dropped); a second,
+         // synchronous console appender here would both duplicate every line and reintroduce a
+         // blocking write on the calling thread when stdout is a slow pipe.
+#elif !defined(__ANDROID__)
          static plog::ColorConsoleAppender<plog::TxtFormatter> consoleAppender;
          plog::Logger<PLOG_DEFAULT_INSTANCE_ID>::getInstance()->addAppender(&consoleAppender);
          plog::Logger<PLOG_NO_DBG_OUT_INSTANCE_ID>::getInstance()->addAppender(&consoleAppender);

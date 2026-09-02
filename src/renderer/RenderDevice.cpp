@@ -3125,6 +3125,9 @@ bool RenderDevice::AreFrameStatsEnabled()
       s_checked = true;
       s_enabled = g_pplayer && g_pplayer->m_ptable
          && g_pplayer->m_ptable->m_settings.GetStandalone_4kpGpuTimers();
+      // The frame-pacing histogram (utils/wintimer.h, 10.8.0 port) shares the switch: vblank
+      // bucket width fixed at 60 Hz, the cabinets' panel rate.
+      g_framePacingLogVblankUsec = s_enabled ? 16667u : 0u;
    }
    return s_enabled;
 }

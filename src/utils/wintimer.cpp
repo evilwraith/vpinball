@@ -407,3 +407,9 @@ int _tmain(int argc, _TCHAR* argv[])
     return 0;
 }
 #endif
+
+#ifdef __RK3588__
+// [4kpDebug][frame_pacing]: 0 = off; set from Standalone/4kpGpuTimers at player start
+// (RenderDevice::AreFrameStatsEnabled's first evaluation).
+unsigned int g_framePacingLogVblankUsec = 0;
+#endif
