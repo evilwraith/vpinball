@@ -3052,9 +3052,12 @@ void RenderDevice::PumpBoundaryBegin()
       srcW = (int)slots->GetWidth();
       srcH = (int)slots->GetHeight();
    }
-   s_boundarySurf.PumpBegin(srcFbo, srcW, srcH);
+   // Single phase, at frame start: the two-phase experiment (queue content early, swap after the
+   // commits) measured swap-only 16 ms at frame end -- libmali drains the ENTIRE context queue at
+   // any swap, wherever it sits, so the least-bad placement is here, where the queue holds only
+   // the previous frame's tail.
+   s_boundarySurf.Pump(srcFbo, srcW, srcH);
    s_boundaryPumpUs += usec() - tPump;
-   s_pumpArmedThisFrame = true;
 }
 
 // Phase B, after the frame's commits: swap the boundary. Its content was queued at Begin and has
@@ -3062,12 +3065,9 @@ void RenderDevice::PumpBoundaryBegin()
 // frame's GL from the queue.
 void RenderDevice::PumpBoundaryEnd()
 {
-   if (!s_pumpArmedThisFrame)
-      return;
+   // Retired by measurement: any swap drains the whole context queue on this blob, so a
+   // frame-end swap waits on the frame it just issued. Kept as a no-op call site.
    s_pumpArmedThisFrame = false;
-   const uint64_t tPump = usec();
-   s_boundarySurf.Pump();
-   s_boundaryPumpUs += usec() - tPump;
 }
 #endif
 
