@@ -22,17 +22,18 @@ FMT_SHA=11.1.4
 # 4kp: KMSDRM/GBM EGL hunks ported from evilwraith/bgfx@03f25e9 (branch 4kp_fixes)
 BGFX_PATCHSET=kmsdrm-gbm-egl-gles-only-profiler-skippresent-primaryonly-012
 BGFX_CMAKE_VERSION=1.157.9447-569
-BGFX_PATCH_SHA=8cd1aa31dff55f1855c05d6fee0b82e3c780c468
-PINMAME_SHA=d32f0ad7275b733e25d4644193d93c578707fdce
+BGFX_PATCH_SHA=b85f38efb832c2c2d462d386ade8278349f804a2
+PINMAME_SHA=b245dc56a799f93cbf7770be39da9d18d4342f11
 OPENXR_SHA=b15ef6ce120dad1c7d3ff57039e73ba1a9f17102
 LIBDMDUTIL_SHA=3485e2e0e1e9252148914cd613510ccad7bb56b5
 LIBALTSOUND_SHA=f4b790a19ae45a9f93ae0051df6933800c7a6446
-LIBDOF_SHA=eef645d9f5df618290962946c9e3e8ed30886639
+LIBDOF_SHA=afc2be6e79644a78670be2f4de3e83daa0baaa5f
 # VPINBALL/4kp: FFmpeg comes from nyanmisaka/ffmpeg-rockchip, not FFmpeg/FFmpeg, and is built
 # against rkmpp + rkrga so the RK3588 hardware video path exists at all (h264_rkmpp / hevc_rkmpp
 # decoders and encoders, and RGA/im2d colour conversion). Stock FFmpeg has none of it. The cabinets
 # keep hardware decode OFF by default -- librockchip_mpp has crashed -- but RGA colour convert and
-# the encoders are wanted, and neither is reachable without this build.
+# the encoders are wanted, and neither is reachable without this build. Upstream FFMPEG_SHA bumps
+# name the stock repo and do not apply here.
 FFMPEG_REPO=nyanmisaka/ffmpeg-rockchip
 FFMPEG_SHA=388741a3544b92cf525f1cb3746ba9fb8f301d9a
 FFMPEG_PATCHSET=rkmpp-rkrga-001

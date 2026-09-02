@@ -174,8 +174,8 @@ PSC_CLASS_START(B2S_Server, B2SServer)
    PSC_PROXY_PROP_RW_ARRAY1(me, bool, Switch, int)
    PSC_PROXY_PROP_W_ARRAY1(me, int32, Mech, int)
    PSC_PROXY_PROP_R_ARRAY1(me, int32, GetMech, int)
-   PSC_PROXY_PROP_R_ARRAY1(me, int32, Lamp, int)
-   PSC_PROXY_PROP_R_ARRAY1(me, int32, Solenoid, int)
+   PSC_PROXY_PROP_R_ARRAY1(me, bool, Lamp, int)
+   PSC_PROXY_PROP_R_ARRAY1(me, bool, Solenoid, int)
    PSC_PROXY_PROP_R_ARRAY1(me, int32, GIString, int)
    PSC_PROXY_PROP_RW_ARRAY1(me, int32, Dip, int)
    PSC_PROXY_PROP_R(me, B2S_ByteArray, NVRAM)
@@ -259,7 +259,7 @@ MSGPI_EXPORT void MSGPIAPI B2SPluginLoad(const uint32_t sessionId, const MsgPlug
    msgApi->BroadcastMsg(endpointId, getScriptApiId, &scriptApi);
 
    B2SRenderer::RegisterSettings(msgApi, endpointId);
-   B2SDMDOverlay::RegisterSettings(msgApi, endpointId);
+   DMDOverlay::DMDOverlay::RegisterSettings(msgApi, endpointId);
 
    nServer = 0;
    auto classLambda = [](ScriptClassDef* scd) { scriptApi->RegisterScriptClass(scd); };

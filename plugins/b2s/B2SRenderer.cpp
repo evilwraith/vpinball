@@ -14,13 +14,13 @@ namespace B2S {
 
 MSGPI_BOOL_VAL_SETTING(showGrillProp, "ShowGrill", "Show Grill", "Show Grill", true, false);
 
-B2SRenderer::B2SRenderer(const MsgPluginAPI* const msgApi, const unsigned int endpointId, std::shared_ptr<B2STable> b2s)
+B2SRenderer::B2SRenderer(const MsgPluginAPI* const msgApi, const VPXPluginAPI* const vpxApi, const unsigned int endpointId, std::shared_ptr<B2STable> b2s)
    : m_b2s(b2s)
    , m_msgApi(msgApi)
    , m_endpointId(endpointId)
    , m_resURIResolver(*msgApi, endpointId, true, false, false)
-   , m_scoreViewDmdOverlay(m_resURIResolver, m_dmdTex, m_b2s->m_dmdImage.m_image)
-   , m_backglassDmdOverlay(m_resURIResolver, m_dmdTex,
+   , m_scoreViewDmdOverlay(vpxApi, m_resURIResolver, m_dmdTex, m_b2s->m_dmdImage.m_image)
+   , m_backglassDmdOverlay(vpxApi, m_resURIResolver, m_dmdTex,
         m_b2s->m_backglassImage.m_image         ? m_b2s->m_backglassImage.m_image
            : m_b2s->m_backglassOffImage.m_image ? m_b2s->m_backglassOffImage.m_image
                                                 : m_b2s->m_backglassOnImage.m_image)
@@ -31,7 +31,7 @@ B2SRenderer::B2SRenderer(const MsgPluginAPI* const msgApi, const unsigned int en
            const string pinmamePrefix(PMPI_GAMEID_PREFIX);
            std::erase_if(items, [&pinmamePrefix](const ControllerDef& src) { return !string(src.gameId).starts_with(pinmamePrefix); });
         },
-        nullptr, [this]() { m_stateSources.SelectItems(true); })
+        nullptr, [this]() { m_stateSources.Refresh(); })
    , m_stateSources(
         msgApi, endpointId, CTLPI_STATE_GET_SRC_MSG, CTLPI_STATE_ON_SRC_CHG_MSG,
         [this](std::vector<StateSrcId>& items)
@@ -64,12 +64,14 @@ B2SRenderer::B2SRenderer(const MsgPluginAPI* const msgApi, const unsigned int en
    m_msgApi->SubscribeMsg(m_endpointId, m_onSegChangedMsgId, OnSegSrcChanged, this);
    OnSegSrcChanged(m_onSegChangedMsgId, this, nullptr);
 
-   m_pinmameControllers.SelectItems(true);
-   m_stateSources.SelectItems(true);
+   m_stateSources.Subscribe();
+   m_pinmameControllers.Subscribe();
 }
 
 B2SRenderer::~B2SRenderer()
 {
+   m_stateSources.Unsubscribe();
+   m_pinmameControllers.Unsubscribe();
    m_msgApi->UnsubscribeMsg(m_onSegChangedMsgId, OnSegSrcChanged, this);
    m_msgApi->ReleaseMsgID(m_onSegChangedMsgId);
    m_msgApi->ReleaseMsgID(m_getSegSrcMsgId);
@@ -146,13 +148,13 @@ std::function<void()> B2SRenderer::ResolveRomPropUpdater(const std::vector<State
          if (def.mappingId == romId && def.dataFormat == CTLPI_STATE_FORMAT_FLOAT && def.GetState)
          {
             if (romInverted)
-               return [this, value, getter = def.GetState, id = src.id, i]()
+               return [this, value, def]()
                {
-                  m_stateSources.With([this, value, getter, id, i](const std::vector<StateSrcId>&) { getter(id, i, value); });
+                  m_stateSources.With([this, value, &def](const std::vector<StateSrcId>&) { def.GetState(def.callContext, value); });
                   *value = 1.f - *value;
                };
             else
-               return [this, value, getter = def.GetState, id = src.id, i]() { m_stateSources.With([this, value, getter, id, i](const std::vector<StateSrcId>&) { getter(id, i, value); }); };
+               return [this, value, def]() { m_stateSources.With([this, value, &def](const std::vector<StateSrcId>&) { def.GetState(def.callContext, value); }); };
          }
       }
    }
@@ -218,7 +220,7 @@ void B2SRenderer::RenderScores(VPXRenderContext2D* ctx, B2SServer* server, const
    int digitIndex = 1;
    for (const auto& display : m_segDisplays)
    {
-      SegDisplayFrame state = display.GetState(display.id);
+      SegDisplayFrame state = display.GetState(display.callContext);
       for (unsigned int i = 0; i < display.nElements; i++)
       {
          VPXSegDisplayHint hint = VPXSegDisplayHint::Generic;

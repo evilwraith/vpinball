@@ -44,6 +44,8 @@ Controller::Controller(const MsgPluginAPI* api, unsigned int endpointId, const P
    m_getDmdSrcMsgId = m_msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_SRC_MSG);
    m_onDmdChangedMsgId = m_msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_ON_SRC_CHG_MSG);
    m_msgApi->SubscribeMsg(m_endpointId, m_onDmdChangedMsgId, OnDmdSrcChanged, this);
+
+   m_stateSources.Subscribe();
 }
 
 Controller::~Controller()
@@ -51,6 +53,8 @@ Controller::~Controller()
    assert(m_threadLock == std::this_thread::get_id());
 
    Stop();
+
+   m_stateSources.Unsubscribe();
 
    m_msgApi->UnsubscribeMsg(m_onDmdChangedMsgId, OnDmdSrcChanged, this);
    m_msgApi->ReleaseMsgID(m_onDmdChangedMsgId);
@@ -371,7 +375,7 @@ void Controller::OnStateSrcChanged(const std::vector<StateSrcId>& stateSources)
                if (switchOfs < m_switchStates.size())
                {
                   uint8_t bv = m_switchStates[switchOfs] ? 0xFF : 0;
-                  m_switches.stateDefs[i].SetState(m_switches.id, i, &bv);
+                  m_switches.stateDefs[i].SetState(m_switches.stateDefs[i].callContext, &bv);
                }
             }
          }
@@ -390,7 +394,7 @@ void Controller::OnStateSrcChanged(const std::vector<StateSrcId>& stateSources)
                {
                   // Applied cached DIP switch states that may have been defined before starting the machine
                   uint8_t bv = m_dipSwitchStates[m_dipSwitches.stateDefs[i].mappingId] ? 0xFF : 0;
-                  m_dipSwitches.stateDefs[i].SetState(m_dipSwitches.id, i, &bv);
+                  m_dipSwitches.stateDefs[i].SetState(m_dipSwitches.stateDefs[i].callContext, &bv);
                }
             }
          }
@@ -461,7 +465,8 @@ bool Controller::GetSwitch(int switchNo) const
             if (const unsigned int index = m_switchMap[switchNoOfs]; index < m_switches.nStates && m_switches.stateDefs[index].GetState != nullptr)
             {
                uint8_t state = 0;
-               m_switches.stateDefs[index].GetState(m_switches.id, index, &state);
+               const StateDef& def = m_switches.stateDefs[index];
+               def.GetState(def.callContext, &state);
                swState = state != 0;
                return;
             }
@@ -489,7 +494,7 @@ void Controller::SetSwitch(int switchNo, bool state)
             if (const unsigned int index = m_switchMap[switchNoOfs]; index < m_switches.nStates && m_switches.stateDefs[index].SetState != nullptr)
             {
                uint8_t bv = state ? 0xFF : 0;
-               m_switches.stateDefs[index].SetState(m_switches.id, index, &bv);
+               m_switches.stateDefs[index].SetState(m_switches.stateDefs[index].callContext, &bv);
             }
       });
 }
@@ -510,7 +515,8 @@ int Controller::GetDip(int nDipBank) const
             {
                if (const unsigned int index = m_dipSwitchMap[dipSwitchNo]; index < m_dipSwitches.nStates && m_dipSwitches.stateDefs[index].GetState != nullptr)
                {
-                  m_dipSwitches.stateDefs[index].GetState(m_dipSwitches.id, index, &state);
+                  const StateDef& def = m_dipSwitches.stateDefs[index];
+                  def.GetState(def.callContext, &state);
                   if (state != 0)
                      result |= 1u << i;
                }
@@ -547,7 +553,7 @@ void Controller::SetDip(int nDipBank, int byteState)
                if (const unsigned int index = m_dipSwitchMap[dipSwitchNo]; index < m_dipSwitches.nStates && m_dipSwitches.stateDefs[index].SetState != nullptr)
                {
                   uint8_t bv = (state != 0) ? 0xFF : 0;
-                  m_dipSwitches.stateDefs[index].SetState(m_dipSwitches.id, index, &bv);
+                  m_dipSwitches.stateDefs[index].SetState(m_dipSwitches.stateDefs[index].callContext, &bv);
                }
             }
          }
@@ -592,18 +598,24 @@ void Controller::SetModOutputType(int output, int no, int newVal)
       PinmameSetModOutputType(output, no, static_cast<PINMAME_MOD_OUTPUT_TYPE>(newVal));
 }
 
-int Controller::GetSolenoid(int solenoid) const
+bool Controller::GetSolenoid(int solenoid) const
 {
    uint8_t solState = 0;
-   m_stateSources.With([this, &solenoid, &solState](const std::vector<StateSrcId>& states) {
-      if (solenoid >= 0 && solenoid < m_solenoidMap.size())
-         if (const unsigned int index = m_solenoidMap[solenoid]; index < m_solenoids.nStates)
-               m_solenoids.stateDefs[index].GetState(m_solenoids.id, index, &solState);
-      });
-   return solState;
+   m_stateSources.With(
+      [this, &solenoid, &solState](const std::vector<StateSrcId>& states)
+      {
+         if (solenoid >= 0 && solenoid < m_solenoidMap.size())
+            if (const unsigned int index = m_solenoidMap[solenoid]; index < m_solenoids.nStates)
+            {
+               const StateDef& def = m_solenoids.stateDefs[index];
+               def.GetState(def.callContext, &solState);
+            }
+         });
+   // state is either 0/1 or 0..255
+   return solState > (m_deviceMode == DM_BINARY ? 0 : 127);
 }
 
-int Controller::GetLamp(int lamp) const
+bool Controller::GetLamp(int lamp) const
 {
    uint8_t lampState = 0;
    m_stateSources.With(
@@ -611,9 +623,13 @@ int Controller::GetLamp(int lamp) const
       {
          if (lamp >= 0 && lamp < m_lampMap.size())
             if (const unsigned int index = m_lampMap[lamp]; index < m_lamps.nStates)
-               m_lamps.stateDefs[index].GetState(m_lamps.id, index, &lampState);
+            {
+               const StateDef& def = m_lamps.stateDefs[index];
+               def.GetState(def.callContext, &lampState);
+            }
       });
-   return lampState;
+   // state is either 0/1 or 0..255
+   return lampState > (m_deviceMode != DM_PHYSOUT ? 0 : 127);
 }
 
 int Controller::GetGIString(int giString) const
@@ -624,7 +640,10 @@ int Controller::GetGIString(int giString) const
       {
          if (giString >= 0 && giString < m_giMap.size())
             if (const unsigned int index = m_giMap[giString]; index < m_gis.nStates)
-               m_gis.stateDefs[index].GetState(m_gis.id, index, &giState);
+            {
+               const StateDef& def = m_gis.stateDefs[index];
+               def.GetState(def.callContext, &giState);
+            }
       });
    return giState;
 }
@@ -641,7 +660,7 @@ const vector<PinmameLampState>& Controller::GetChangedLamps() const
             const StateDef& def = m_lamps.stateDefs[lampIndex];
             if (def.dataFormat != CTLPI_STATE_FORMAT_UINT8 || def.GetState == nullptr)
                continue;
-            if (def.GetState(m_lamps.id, lampIndex, &state); m_prevLampStates[lampIndex] == state)
+            if (def.GetState(def.callContext, &state); m_prevLampStates[lampIndex] == state)
                continue;
             m_prevLampStates[lampIndex] = state;
             m_changedLamps.emplace_back(def.mappingId, state);
@@ -662,7 +681,7 @@ const vector<PinmameGIState>& Controller::GetChangedGIStrings() const
             const StateDef& def = m_gis.stateDefs[giIndex];
             if (def.dataFormat != CTLPI_STATE_FORMAT_UINT8 || def.GetState == nullptr)
                continue;
-            if (def.GetState(m_gis.id, giIndex, &state); m_prevGIStates[giIndex] == state)
+            if (def.GetState(def.callContext, &state); m_prevGIStates[giIndex] == state)
                continue;
             m_prevGIStates[giIndex] = state;
             m_changedGIs.emplace_back(def.mappingId, state);
@@ -683,7 +702,7 @@ const vector<PinmameSolenoidState>& Controller::GetChangedSolenoids() const
             const StateDef& def = m_solenoids.stateDefs[solIndex];
             if (def.dataFormat != CTLPI_STATE_FORMAT_UINT8 || def.GetState == nullptr)
                continue;
-            if (def.GetState(m_solenoids.id, solIndex, &state); m_prevSolenoidStates[solIndex] == state)
+            if (def.GetState(def.callContext, &state); m_prevSolenoidStates[solIndex] == state)
                continue;
             m_prevSolenoidStates[solIndex] = state;
             if (def.mappingId == 0 || def.mappingId > 64 || (m_solMask & (1ULL << (def.mappingId - 1))) != 0)
@@ -766,7 +785,7 @@ std::vector<uint8_t> Controller::GetRawDmdPixels()
    std::vector<uint8_t> pixels;
    if (m_defaultDmd.id.id == 0)
       return pixels;
-   const DisplayFrame frame = m_defaultDmd.GetRenderFrame(m_defaultDmd.id);
+   const DisplayFrame frame = m_defaultDmd.GetRenderFrame(m_defaultDmd.callContext);
    const int size = m_defaultDmd.width * m_defaultDmd.height;
    if (m_defaultDmd.frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F)
    {
@@ -791,7 +810,7 @@ std::vector<uint32_t> Controller::GetRawDmdColoredPixels()
    std::vector<uint32_t> pixels;
    if (m_defaultDmd.id.id == 0)
       return pixels;
-   const DisplayFrame frame = m_defaultDmd.GetRenderFrame(m_defaultDmd.id);
+   const DisplayFrame frame = m_defaultDmd.GetRenderFrame(m_defaultDmd.callContext);
    const int size = m_defaultDmd.width * m_defaultDmd.height;
    if (m_defaultDmd.frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F)
    {

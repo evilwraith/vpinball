@@ -127,7 +127,7 @@ private:
 
    void ProcessFrame(const DisplaySrcId& dmdSource)
    {
-      const DisplayFrame frame = dmdSource.GetRenderFrame(dmdSource.id);
+      const DisplayFrame frame = dmdSource.GetRenderFrame(dmdSource.callContext);
       if (m_lastFrameID == frame.frameId)
          return;
       m_lastFrameID = frame.frameId;
@@ -299,12 +299,12 @@ MSGPI_EXPORT void MSGPIAPI DMDUtilPluginLoad(const uint32_t sessionId, const Msg
             LOGI(std::format("DMD source selected [endpointId={}.{}, {}x{} fmt={}]", dmdSrc.id.endpointId, dmdSrc.id.resId, dmdSrc.width, dmdSrc.height, dmdSrc.frameFormat));
             dmdDispatcher = std::make_unique<DMDUtilDispatcher>();
          }); });
-   dmdSource->SelectItems(true);
+   dmdSource->Subscribe();
 }
 
 MSGPI_EXPORT void MSGPIAPI DMDUtilPluginUnload()
 {
-   dmdDispatcher = nullptr;
+   dmdSource->Unsubscribe();
    dmdSource = nullptr;
    msgApi = nullptr;
 }

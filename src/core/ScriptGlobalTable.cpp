@@ -504,56 +504,6 @@ static BSTR BstrFromVariant(VARIANT *pvar, LCID lcid)
 
 STDMETHODIMP ScriptGlobalTable::SaveValue(BSTR TableName, BSTR ValueName, VARIANT Value)
 {
-   HRESULT hr;
-
-#ifndef __STANDALONE__
-   const wstring wzPath = (g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, true) / "VPReg.stg"sv).wstring();
-
-   IStorage *pstgRoot;
-   if (FAILED(hr = StgOpenStorage(wzPath.c_str(), nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgRoot)))
-   {
-      // Registry file does not exist - create it
-      if (FAILED(hr = StgCreateDocfile(wzPath.c_str(), STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_CREATE, 0, &pstgRoot)))
-      {
-         if (FAILED(hr = StgCreateDocfile(wzPath.c_str(), STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_CREATE, 0, &pstgRoot)))
-            return hr;
-      }
-   }
-
-   IStorage *pstgTable;
-   if (FAILED(hr = pstgRoot->OpenStorage(TableName, nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgTable)))
-   {
-      // Table file does not exist
-      if (FAILED(hr = pstgRoot->CreateStorage(TableName, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_CREATE, 0, 0, &pstgTable)))
-      {
-         pstgRoot->Release();
-         return hr;
-      }
-   }
-
-   IStream *pstmValue;
-   if (FAILED(hr = pstgTable->CreateStream(ValueName, STGM_DIRECT | STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_CREATE, 0, 0, &pstmValue)))
-   {
-      pstgTable->Release();
-      pstgRoot->Release();
-      return hr;
-   }
-
-   BSTR bstr = BstrFromVariant(&Value, 0x409);
-
-   DWORD writ;
-   pstmValue->Write((WCHAR *)bstr, (uint32_t)/*wcslen*/ SysStringLen(bstr) * (uint32_t)sizeof(WCHAR), &writ);
-
-   SysFreeString(bstr);
-
-   pstmValue->Release();
-
-   pstgTable->Commit(STGC_DEFAULT);
-   pstgTable->Release();
-
-   pstgRoot->Commit(STGC_DEFAULT);
-   pstgRoot->Release();
-#else
    mINI::INIStructure ini;
    mINI::INIFile file(g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, true) / "VPReg.ini"sv);
    file.read(ini);
@@ -561,10 +511,8 @@ STDMETHODIMP ScriptGlobalTable::SaveValue(BSTR TableName, BSTR ValueName, VARIAN
    string szTableName = MakeString(TableName);
    string szValueName = MakeString(ValueName);
    string szValue;
-
-   BSTR bstr = BstrFromVariant(&Value, 0x409);
-
-   if (bstr) {
+   if (BSTR bstr = BstrFromVariant(&Value, 0x409); bstr)
+   {
       szValue = MakeString(bstr);
       SysFreeString(bstr);
    }
@@ -574,63 +522,12 @@ STDMETHODIMP ScriptGlobalTable::SaveValue(BSTR TableName, BSTR ValueName, VARIAN
    file.write(ini);
 
    PLOGD << "TableName=" << szTableName << ", ValueName=" << szValueName << ", Value=" << szValue;
-#endif
    return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::LoadValue(BSTR TableName, BSTR ValueName, VARIANT *Value)
 {
-   HRESULT hr;
-
-#ifndef __STANDALONE__
-   const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, false) / "VPReg.stg"sv;
-
-   IStorage *pstgRoot;
-   if (FAILED(hr = StgOpenStorage(path.wstring().c_str(), nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgRoot)))
-   {
-      SetVarBstr(Value, SysAllocString(L""));
-      return S_OK;
-   }
-
-   IStorage* pstgTable;
-   if (FAILED(hr = pstgRoot->OpenStorage(TableName, nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgTable)))
-   {
-      SetVarBstr(Value, SysAllocString(L""));
-      pstgRoot->Release();
-      return S_OK;
-   }
-
-   IStream* pstmValue;
-   if (FAILED(hr = pstgTable->OpenStream(ValueName, 0, STGM_DIRECT | STGM_READ | STGM_SHARE_EXCLUSIVE, 0, &pstmValue)))
-   {
-      SetVarBstr(Value, SysAllocString(L""));
-      pstgTable->Release();
-      pstgRoot->Release();
-      return S_OK;
-   }
-
-   STATSTG statstg;
-   pstmValue->Stat(&statstg, STATFLAG_NONAME);
-
-   const unsigned int size = statstg.cbSize.LowPart / sizeof(WCHAR);
-
-   BSTR wzT = SysAllocStringLen(nullptr,size);
-
-   DWORD read;
-   hr = pstmValue->Read(wzT, size * (int)sizeof(WCHAR), &read);
-   wzT[size] = L'\0';
-
-   pstmValue->Release();
-
-   pstgTable->Commit(STGC_DEFAULT);
-   pstgTable->Release();
-
-   pstgRoot->Commit(STGC_DEFAULT);
-   pstgRoot->Release();
-
-   SetVarBstr(Value, wzT);
-#else
-   Settings* const pSettings = &g_pplayer->m_ptable->m_settings;
+   Settings *const pSettings = &g_pplayer->m_ptable->m_settings;
 
    mINI::INIStructure ini;
    mINI::INIFile file(g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, false) / "VPReg.ini"sv);
@@ -639,14 +536,70 @@ STDMETHODIMP ScriptGlobalTable::LoadValue(BSTR TableName, BSTR ValueName, VARIAN
    string szTableName = MakeString(TableName);
    string szValueName = MakeString(ValueName);
 
-   if (ini.has(szTableName) && ini[szTableName].has(szValueName)) {
+   if (ini.has(szTableName) && ini[szTableName].has(szValueName))
+   {
       SetVarBstr(Value, MakeWideBSTR(ini[szTableName][szValueName]));
    }
    else
+   {
       SetVarBstr(Value, SysAllocString(L""));
+#ifndef __STANDALONE__
+      // VPX used to save table persisted values in a OLE container. When the value is missing, try to locate & load from a legacy file.
+      {
+         HRESULT hr;
+
+         const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, false) / "VPReg.stg"sv;
+
+         IStorage *pstgRoot;
+         if (FAILED(StgOpenStorage(path.wstring().c_str(), nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgRoot)))
+         {
+            SetVarBstr(Value, SysAllocString(L""));
+            return S_OK;
+         }
+
+         IStorage *pstgTable;
+         if (FAILED(pstgRoot->OpenStorage(TableName, nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgTable)))
+         {
+            SetVarBstr(Value, SysAllocString(L""));
+            pstgRoot->Release();
+            return S_OK;
+         }
+
+         IStream *pstmValue;
+         if (FAILED(pstgTable->OpenStream(ValueName, 0, STGM_DIRECT | STGM_READ | STGM_SHARE_EXCLUSIVE, 0, &pstmValue)))
+         {
+            SetVarBstr(Value, SysAllocString(L""));
+            pstgTable->Release();
+            pstgRoot->Release();
+            return S_OK;
+         }
+
+         STATSTG statstg;
+         pstmValue->Stat(&statstg, STATFLAG_NONAME);
+
+         const unsigned int size = statstg.cbSize.LowPart / sizeof(WCHAR);
+
+         BSTR wzT = SysAllocStringLen(nullptr, size);
+
+         DWORD read;
+         hr = pstmValue->Read(wzT, size * (int)sizeof(WCHAR), &read);
+         wzT[size] = L'\0';
+
+         pstmValue->Release();
+
+         pstgTable->Commit(STGC_DEFAULT);
+         pstgTable->Release();
+
+         pstgRoot->Commit(STGC_DEFAULT);
+         pstgRoot->Release();
+
+         SetVarBstr(Value, wzT);
+      }
+#endif
+   }
 
    PLOGD << "TableName=" << szTableName << ", ValueName=" << szValueName << ", Value=" << MakeString(V_BSTR(Value));
-#endif
+
    return S_OK;
 }
 
@@ -925,6 +878,9 @@ STDMETHODIMP ScriptGlobalTable::put_DMDPixels(VARIANT pVal) // assumes VT_UI1 as
    if (!SafeArrayHasAtLeast(psa, size))
       return E_FAIL;
 
+   if (g_pplayer->m_dmdFrame != nullptr
+      && (g_pplayer->m_dmdFrame->width() != g_pplayer->m_dmdSize.x || g_pplayer->m_dmdFrame->height() != g_pplayer->m_dmdSize.y || g_pplayer->m_dmdFrame->m_format != BaseTexture::BW_FP32))
+      g_pplayer->m_pluginAPI.OnDMDUpdated(nullptr, nullptr);
    BaseTexture::Update(g_pplayer->m_dmdFrame, g_pplayer->m_dmdSize.x, g_pplayer->m_dmdSize.y, BaseTexture::BW_FP32, nullptr);
    // Convert from linear [0..100] luminance
    VARIANT *p;
@@ -934,7 +890,7 @@ STDMETHODIMP ScriptGlobalTable::put_DMDPixels(VARIANT pVal) // assumes VT_UI1 as
       data[ofs] = (float)V_UI4(&p[ofs]) * (float)(1.0 / 100.);
    SafeArrayUnaccessData(psa);
    g_pplayer->m_dmdFrameId++;
-   g_pplayer->m_pluginAPI.UpdateDMDSource(nullptr, true);
+   g_pplayer->m_pluginAPI.OnDMDUpdated(nullptr, g_pplayer->m_dmdFrame);
    return S_OK;
 }
 
@@ -948,6 +904,9 @@ STDMETHODIMP ScriptGlobalTable::put_DMDColoredPixels(VARIANT pVal) //!! assumes 
    if (!SafeArrayHasAtLeast(psa, size))
       return E_FAIL;
 
+   if (g_pplayer->m_dmdFrame != nullptr
+      && (g_pplayer->m_dmdFrame->width() != g_pplayer->m_dmdSize.x || g_pplayer->m_dmdFrame->height() != g_pplayer->m_dmdSize.y || g_pplayer->m_dmdFrame->m_format != BaseTexture::SRGBA))
+      g_pplayer->m_pluginAPI.OnDMDUpdated(nullptr, nullptr);
    BaseTexture::Update(g_pplayer->m_dmdFrame, g_pplayer->m_dmdSize.x, g_pplayer->m_dmdSize.y, BaseTexture::SRGBA, nullptr);
    uint32_t *const __restrict data = reinterpret_cast<uint32_t *>(g_pplayer->m_dmdFrame->data());
    // gamma compressed [0..255] sRGB
@@ -957,7 +916,7 @@ STDMETHODIMP ScriptGlobalTable::put_DMDColoredPixels(VARIANT pVal) //!! assumes 
       data[ofs] = V_UI4(&p[ofs]) | 0xFF000000u;
    SafeArrayUnaccessData(psa);
    g_pplayer->m_dmdFrameId++;
-   g_pplayer->m_pluginAPI.UpdateDMDSource(nullptr, true);
+   g_pplayer->m_pluginAPI.OnDMDUpdated(nullptr, g_pplayer->m_dmdFrame);
    return S_OK;
 }
 

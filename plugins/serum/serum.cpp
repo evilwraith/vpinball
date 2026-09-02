@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <mutex>
 #include <random>
+#include <algorithm>
 #include <thread>
 #include <vector>
 
@@ -44,21 +45,24 @@ static std::unique_ptr<class SerumColorizer> colorizer;
 
 MSGPI_STRING_VAL_SETTING(serumPathProp, "SerumPath", "Serum Path", "Folder that cotains Serum colorization files (cROMc, cRZ)", true, "", 1024);
 
+// A display Serum can colorize, and FilterDmdSource can later accept for the selected controller
+static bool IsColorizableDmd(const DisplaySrcId& display) { return display.GetIdentifyFrame != nullptr && display.width >= 128; }
+
 class SerumColorizer
 {
 public:
-   SerumColorizer(const std::filesystem::path& serumPath, const string& currentGameId, uint32_t controllerEndpointId)
-      : m_pSerum(Serum_Load(serumPath.string().c_str(), currentGameId.c_str(), FLAG_REQUEST_32P_FRAMES | FLAG_REQUEST_64P_FRAMES))
+   SerumColorizer(const std::filesystem::path& serumPath, const std::string_view& currentGameId, uint32_t controllerEndpointId)
+      : m_pSerum(Serum_Load(serumPath.string().c_str(), string(currentGameId).c_str(), FLAG_REQUEST_32P_FRAMES | FLAG_REQUEST_64P_FRAMES))
       , m_controllerEndpointId(controllerEndpointId)
+      , m_colorizedDmd(msgApi, endpointId, CTLPI_DISPLAY_GET_SRC_MSG, CTLPI_DISPLAY_ON_SRC_CHG_MSG)
+      , m_colorizedframeId(std_rand())
       , m_dmdSource(
            msgApi, endpointId, CTLPI_DISPLAY_GET_SRC_MSG, CTLPI_DISPLAY_ON_SRC_CHG_MSG, [this](std::vector<DisplaySrcId>& items) { FilterDmdSource(items); },
            [this]() { StopColorizeThread(); }, [this]() { StartColorizeThread(); })
-      , m_colorizedDmd(msgApi, endpointId, CTLPI_DISPLAY_GET_SRC_MSG, CTLPI_DISPLAY_ON_SRC_CHG_MSG)
-      , m_colorizedframeId(std_rand())
    {
       if (m_pSerum)
       {
-         m_dmdSource.SelectItems(true);
+         m_dmdSource.Subscribe();
       }
       else
       {
@@ -70,7 +74,10 @@ public:
    {
       StopColorizeThread();
       if (m_pSerum)
+      {
+         m_dmdSource.Unsubscribe();
          Serum_Dispose();
+      }
    }
 
 private:
@@ -90,7 +97,7 @@ private:
 
       DisplaySrcId selected { };
       for (const DisplaySrcId& item : items)
-         if (isFromController(item) && item.GetIdentifyFrame != nullptr && item.width >= 128)
+         if (isFromController(item) && IsColorizableDmd(item))
             selected = item;
 
       items.clear();
@@ -142,7 +149,7 @@ private:
          std::this_thread::sleep_for(std::chrono::microseconds(16666));
 
          // Lock stateMutex as we directly returns internal Serum colorized frames (which may be modified by the calls here after)
-         std::lock_guard targetLock(m_stateMutex);
+         std::unique_lock targetLock(m_stateMutex);
 
          bool updated = false;
 
@@ -150,7 +157,7 @@ private:
          m_dmdSource.With(
             [&](const std::vector<DisplaySrcId>& items)
             {
-               const DisplayFrame frame = dmdId.GetIdentifyFrame(dmdId.id);
+               const DisplayFrame frame = dmdId.GetIdentifyFrame(dmdId.callContext);
                if (frame.frame == nullptr)
                {
                   m_isRunning = false;
@@ -186,8 +193,7 @@ private:
             while (animationNextTick < now)
             {
                const uint32_t nextrot = Serum_Rotate();
-               updated |= (m_pSerum->SerumVersion == SERUM_V1) && ((m_pSerum->flags & FLAG_RETURNED_V1_ROTATED) != 0);
-               updated |= (m_pSerum->SerumVersion == SERUM_V2) && ((m_pSerum->flags & (FLAG_RETURNED_V2_ROTATED32 | FLAG_RETURNED_V2_ROTATED64)) != 0);
+               updated |= (nextrot & (FLAG_RETURNED_V1_ROTATED | FLAG_RETURNED_V2_ROTATED32 | FLAG_RETURNED_V2_ROTATED64 | FLAG_RETURNED_V2_SCENE)) != 0;
                const uint32_t delayMs = nextrot & 0x0000ffff;
                if (delayMs == 0 || delayMs >= SERUM_MAX_ROTATION_DELAY_MS)
                {
@@ -207,6 +213,8 @@ private:
             const unsigned int size = dmdId.width * dmdId.height;
             if (m_colorFrameV1.size() != size * 3)
             {
+               // Blocks on the main thread, which may be waiting for m_stateMutex in GetRenderFrame
+               targetLock.unlock();
                msgApi->RunOnMainThread(
                   endpointId, -1,
                   [](void* userData)
@@ -219,22 +227,26 @@ private:
                      colorizer->m_colorFrameV1.resize(size * 3);
                      colorizer->m_colorizedDmd.AddItem({
                         .id = { { endpointId, 0 } }, //
-                        .groupId = { endpointId, 0 }, //
                         .overrideId = dmdId.id, //
                         .width = dmdId.width, //
                         .height = dmdId.height, //
                         .hardware = CTLPI_DISPLAY_HARDWARE_RGB_LED, //
+                        .callContext = colorizer, //
                         .frameFormat = CTLPI_DISPLAY_FORMAT_SRGB888, //
-                        .GetRenderFrame = &GetRenderFrameSerumV1 //
+                        .GetRenderFrame = &Trampoline<&SerumColorizer::GetRenderFrameSerumV1>::Call //
                      });
                   },
                   this);
+               targetLock.lock();
             }
             for (unsigned int i = 0; i < size; i++)
                memcpy(&(m_colorFrameV1[i * 3]), &m_pSerum->palette[m_pSerum->frame[i] * 3], 3);
          }
-         else if (m_advertisedWidth32 != m_pSerum->width32 || m_advertisedWidth64 != m_pSerum->width64)
+         // Widths are per frame (0 when a size is missing), so advertise each size once and keep it
+         else if ((m_pSerum->width32 != 0 && m_advertisedWidth32 != m_pSerum->width32) || (m_pSerum->width64 != 0 && m_advertisedWidth64 != m_pSerum->width64))
          {
+            // Blocks on the main thread, which may be waiting for m_stateMutex in GetRenderFrame
+            targetLock.unlock();
             msgApi->RunOnMainThread(
                endpointId, -1,
                [](void* userData)
@@ -242,36 +254,39 @@ private:
                   SerumColorizer* colorizer = static_cast<SerumColorizer*>(userData);
                   DisplaySrcId dmdId = colorizer->m_dmdSource.With([&](const std::vector<DisplaySrcId>& items) { return items.front(); });
                   colorizer->m_colorizedDmd.ClearItems();
-                  colorizer->m_advertisedWidth32 = colorizer->m_pSerum->width32;
-                  colorizer->m_advertisedWidth64 = colorizer->m_pSerum->width64;
+                  if (colorizer->m_pSerum->width32 != 0)
+                     colorizer->m_advertisedWidth32 = colorizer->m_pSerum->width32;
+                  if (colorizer->m_pSerum->width64 != 0)
+                     colorizer->m_advertisedWidth64 = colorizer->m_pSerum->width64;
                   if (colorizer->m_advertisedWidth32 > 0)
                   {
                      colorizer->m_colorizedDmd.AddItem({
                         .id = { { endpointId, 1 } }, //
-                        .groupId = { endpointId, 0 }, //
                         .overrideId = dmdId.id, //
                         .width = colorizer->m_advertisedWidth32, //
                         .height = 32, //
                         .hardware = CTLPI_DISPLAY_HARDWARE_RGB_LED, //
+                        .callContext = colorizer, //
                         .frameFormat = CTLPI_DISPLAY_FORMAT_SRGB565, //
-                        .GetRenderFrame = &GetRenderFrameSerumV2_32 //
+                        .GetRenderFrame = &Trampoline<&SerumColorizer::GetRenderFrameSerumV2_32>::Call //
                      });
                   }
                   if (colorizer->m_advertisedWidth64 > 0)
                   {
                      colorizer->m_colorizedDmd.AddItem({
                         .id = { { endpointId, 2 } }, //
-                        .groupId = { endpointId, 0 }, //
                         .overrideId = dmdId.id, //
                         .width = colorizer->m_advertisedWidth64, //
                         .height = 64, //
                         .hardware = CTLPI_DISPLAY_HARDWARE_RGB_LED, //
+                        .callContext = colorizer, //
                         .frameFormat = CTLPI_DISPLAY_FORMAT_SRGB565, //
-                        .GetRenderFrame = &GetRenderFrameSerumV2_64 //
+                        .GetRenderFrame = &Trampoline<&SerumColorizer::GetRenderFrameSerumV2_64>::Call //
                      });
                   }
                },
                this);
+            targetLock.lock();
          }
          m_colorizedframeId++;
       }
@@ -279,26 +294,25 @@ private:
    }
 
    // Note that to be fully clean we should do a copy of the render (since the direct data is updated asynchronously, so eventually while it is read by consumer)
-   static DisplayFrame GetRenderFrameSerumV1(const CtlResId id)
+   DisplayFrame GetRenderFrameSerumV1()
    {
-      std::lock_guard targetLock(colorizer->m_stateMutex);
-      return { colorizer->m_colorizedframeId, colorizer->m_colorFrameV1.data() };
+      std::lock_guard targetLock(m_stateMutex);
+      return { m_colorizedframeId, m_colorFrameV1.data() };
    }
-   static DisplayFrame GetRenderFrameSerumV2_32(const CtlResId id)
+   DisplayFrame GetRenderFrameSerumV2_32()
    {
-      std::lock_guard targetLock(colorizer->m_stateMutex);
-      return { colorizer->m_colorizedframeId, reinterpret_cast<uint8_t*>(colorizer->m_pSerum->frame32) };
+      std::lock_guard targetLock(m_stateMutex);
+      return { m_colorizedframeId, reinterpret_cast<uint8_t*>(m_pSerum->frame32) };
    }
-   static DisplayFrame GetRenderFrameSerumV2_64(const CtlResId id)
+   DisplayFrame GetRenderFrameSerumV2_64()
    {
-      std::lock_guard targetLock(colorizer->m_stateMutex);
-      return { colorizer->m_colorizedframeId, reinterpret_cast<uint8_t*>(colorizer->m_pSerum->frame64) };
+      std::lock_guard targetLock(m_stateMutex);
+      return { m_colorizedframeId, reinterpret_cast<uint8_t*>(m_pSerum->frame64) };
    }
 
    Serum_Frame_Struc* const m_pSerum;
    const uint32_t m_controllerEndpointId;
 
-   CtrlItemConsumer<DisplaySrcId> m_dmdSource;
    CtrlItemProvider<DisplaySrcId> m_colorizedDmd;
 
    bool m_isRunning = false;
@@ -310,7 +324,64 @@ private:
    unsigned int m_advertisedWidth64 = 0;
 
    unsigned int m_colorizedframeId = 0;
+
+   CtrlItemConsumer<DisplaySrcId> m_dmdSource;
 };
+
+static std::filesystem::path GetColorization(const std::string_view& gameId)
+{
+   VPXTableInfo tableInfo;
+   VPXPluginAPI* vpxApi = nullptr;
+   unsigned int getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
+   msgApi->BroadcastMsg(endpointId, getVpxApiId, &vpxApi);
+   msgApi->ReleaseMsgID(getVpxApiId);
+   if (vpxApi == nullptr)
+      return std::filesystem::path();
+   vpxApi->GetTableInfo(&tableInfo);
+
+   std::filesystem::path tablePath = tableInfo.path;
+
+   const std::filesystem::path cromc = std::format("{}{}", gameId, ".cROMc");
+   const std::filesystem::path crz = std::format("{}{}", gameId, ".cRZ");
+
+   // Priority 1: serum/rom/rom.cromc or .crz
+   if (auto path1 = find_case_insensitive_file_path(tablePath.parent_path() / "serum"sv / gameId / cromc); !path1.empty())
+      return path1.parent_path().parent_path();
+   else if (auto path2 = find_case_insensitive_file_path(tablePath.parent_path() / "serum"sv / gameId / crz); !path2.empty())
+      return path2.parent_path().parent_path();
+   // Priority 2: pinmame/altcolor/rom/rom.cromc or .crz
+   else if (auto path3 = find_case_insensitive_file_path(tablePath.parent_path() / "pinmame"sv / "altcolor"sv / gameId / cromc); !path3.empty())
+      return path3.parent_path().parent_path();
+   else if (auto path4 = find_case_insensitive_file_path(tablePath.parent_path() / "pinmame"sv / "altcolor"sv / gameId / crz); !path4.empty())
+      return path4.parent_path().parent_path();
+   // Priority 3: global setting path
+   else if (std::filesystem::path serumPath = serumPathProp_Get();
+      !serumPath.empty() && (!find_case_insensitive_file_path(serumPath / gameId / cromc).empty() || !find_case_insensitive_file_path(serumPath / gameId / crz).empty()))
+      return serumPath;
+
+   return std::filesystem::path();
+}
+
+// Select the first controller exposing an identifiable DMD and a game for which we have the corresponding assets
+static void SelectController(std::vector<ControllerDef>& items)
+{
+   const unsigned int getDisplaySrcId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_SRC_MSG);
+   const std::vector<DisplaySrcId> displays = PinballPlugin::Controller::GetCtrlItems<DisplaySrcId>(msgApi, endpointId, getDisplaySrcId);
+   msgApi->ReleaseMsgID(getDisplaySrcId);
+   for (const ControllerDef& controller : items)
+   {
+      const bool hasIdentifiableDmd = std::any_of(displays.begin(), displays.end(),
+         [&controller](const DisplaySrcId& display) { return display.id.endpointId == controller.endpointId && IsColorizableDmd(display); });
+      const std::string_view gameId = PinballPlugin::Controller::CtrlGetGameKey(controller.gameId);
+      if (hasIdentifiableDmd && !gameId.empty() && !GetColorization(gameId).empty())
+      {
+         items.clear();
+         items.push_back(controller);
+         return;
+      }
+   }
+   items.clear();
+}
 
 static void OnControllerChanged()
 {
@@ -322,56 +393,10 @@ static void OnControllerChanged()
             LOGI("Serum colorizer stopped");
             return;
          }
-
-         VPXTableInfo tableInfo;
-         VPXPluginAPI* vpxApi = nullptr;
-         unsigned int getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
-         msgApi->BroadcastMsg(endpointId, getVpxApiId, &vpxApi);
-         msgApi->ReleaseMsgID(getVpxApiId);
-         if (vpxApi == nullptr)
-         {
-            LOGE("Failed to get VPX API (needed to locate Serum files)");
-            return;
-         }
-         vpxApi->GetTableInfo(&tableInfo);
-
-         std::filesystem::path tablePath = tableInfo.path;
-
-         // Simply select first controller exposing a PinMAME compatible game (should be only one anyway)
          const ControllerDef& selectedController = items.front();
-         constexpr std::string_view pinmamePrefix(PMPI_GAMEID_PREFIX);
-         const string currentGameId = string(selectedController.gameId).substr(pinmamePrefix.size());
-         if (currentGameId.empty())
-            return;
-
-         std::filesystem::path serumPath = serumPathProp_Get();
-         const std::filesystem::path cromc = currentGameId + ".cROMc";
-         const std::filesystem::path crz = currentGameId + ".cRZ";
-
-         // Priority 1: serum/rom/rom.cromc or .crz
-         if (auto path1 = find_case_insensitive_file_path(tablePath.parent_path() / "serum"sv / currentGameId / cromc); !path1.empty())
-            serumPath = path1.parent_path().parent_path();
-         else if (auto path2 = find_case_insensitive_file_path(tablePath.parent_path() / "serum"sv / currentGameId / crz); !path2.empty())
-            serumPath = path2.parent_path().parent_path();
-         // Priority 2: pinmame/altcolor/rom/rom.cromc or .crz
-         else if (auto path3 = find_case_insensitive_file_path(tablePath.parent_path() / "pinmame"sv / "altcolor"sv / currentGameId / cromc); !path3.empty())
-            serumPath = path3.parent_path().parent_path();
-         else if (auto path4 = find_case_insensitive_file_path(tablePath.parent_path() / "pinmame"sv / "altcolor"sv / currentGameId / crz); !path4.empty())
-            serumPath = path4.parent_path().parent_path();
-         // Priority 3: global setting path
-         else if (!serumPath.empty())
-         {
-            if (find_case_insensitive_file_path(serumPath / currentGameId / cromc).empty() && find_case_insensitive_file_path(serumPath / currentGameId / crz).empty())
-               serumPath.clear();
-         }
-
-         if (serumPath.empty())
-         {
-            LOGI("No colorization file found for "s + currentGameId);
-            return;
-         }
-
-         LOGI("Loading from " + serumPath.string() + " for " + currentGameId);
+         const std::string_view currentGameId = PinballPlugin::Controller::CtrlGetGameKey(selectedController.gameId);
+         const std::filesystem::path serumPath = GetColorization(currentGameId);
+         LOGI(std::format("Loading from '{}' for '{}'", serumPath.string(), currentGameId));
          colorizer = std::make_unique<SerumColorizer>(serumPath, currentGameId, selectedController.endpointId);
       });
 }
@@ -388,19 +413,14 @@ MSGPI_EXPORT void MSGPIAPI SerumPluginLoad(const uint32_t sessionId, const MsgPl
    msgApi->RegisterSetting(endpointId, &serumPathProp);
    onDmdTrigger = msgApi->GetMsgID("Serum", "OnDmdTrigger");
    controllers = std::make_unique<CtrlItemConsumer<ControllerDef>>(
-      msgApi, endpointId, CTLPI_CONTROLLERS_GET_MSG, CTLPI_CONTROLLERS_ON_CHG_MSG,
-      [](std::vector<ControllerDef>& items)
-      {
-         constexpr std::string_view pinmamePrefix(PMPI_GAMEID_PREFIX); // Keep only controllers exposing a PinMAME compatible game
-         std::erase_if(items, [pinmamePrefix](const ControllerDef& controller) { return !string(controller.gameId).starts_with(pinmamePrefix); });
-      },
-      []() { colorizer = nullptr; }, []() { OnControllerChanged(); });
-   controllers->SelectItems(true);
+      msgApi, endpointId, CTLPI_CONTROLLERS_GET_MSG, CTLPI_CONTROLLERS_ON_CHG_MSG, [](std::vector<ControllerDef>& items) { SelectController(items); }, []() { colorizer = nullptr; },
+      []() { OnControllerChanged(); });
+   controllers->Subscribe();
 }
 
 MSGPI_EXPORT void MSGPIAPI SerumPluginUnload()
 {
-   colorizer = nullptr;
+   controllers->Unsubscribe();
    controllers = nullptr;
    msgApi->ReleaseMsgID(onDmdTrigger);
    msgApi = nullptr;

@@ -26,7 +26,7 @@ ResURIResolver::ResURIResolver(const MsgPluginAPI &msgAPI, unsigned int endpoint
          nullptr, // No filtering
          [this]() { m_displayCache.clear(); },
          nullptr); // No setup
-      m_displaySources->SelectItems(true);
+      m_displaySources->Subscribe();
    }
    if (trackSegDisplays)
    {
@@ -35,7 +35,7 @@ ResURIResolver::ResURIResolver(const MsgPluginAPI &msgAPI, unsigned int endpoint
          nullptr, // No filtering
          [this]() { m_segCache.clear(); },
          nullptr); // No setup
-      m_segSources->SelectItems(true);
+      m_segSources->Subscribe();
    }
    if (trackStates)
    {
@@ -44,11 +44,19 @@ ResURIResolver::ResURIResolver(const MsgPluginAPI &msgAPI, unsigned int endpoint
          nullptr, // No filtering
          [this]() { m_floatCache.clear(); },
          nullptr); // No setup
-      m_stateSources->SelectItems(true);
+      m_stateSources->Subscribe();
    }
 }
 
-ResURIResolver::~ResURIResolver() { }
+ResURIResolver::~ResURIResolver()
+{
+   if (m_displaySources)
+      m_displaySources->Unsubscribe();
+   if (m_segSources)
+      m_segSources->Unsubscribe();
+   if (m_stateSources)
+      m_stateSources->Unsubscribe();
+}
 
 string ResURIResolver::trim_string(const string &str)
 {
@@ -119,10 +127,10 @@ float ResURIResolver::GetFloatState(const string &link)
                      {
                         if (const StateDef &def = stateBlock->stateDefs[i]; def.dataFormat == CTLPI_STATE_FORMAT_FLOAT && def.GetState != nullptr && def.mappingId == mapping)
                         {
-                           lambda = [getter = def.GetState, id = stateBlock->id, i](const string &)
+                           lambda = [def](const string &)
                            {
                               float value;
-                              getter(id, i, &value);
+                              def.GetState(def.callContext, &value);
                               return value;
                            };
                            break;
@@ -143,10 +151,10 @@ float ResURIResolver::GetFloatState(const string &link)
                         if (const StateDef &def = stateBlock->stateDefs[i];
                            def.dataFormat == CTLPI_STATE_FORMAT_FLOAT && def.GetState != nullptr && def.name != nullptr && string(def.name) == name)
                         {
-                           lambda = [getter = def.GetState, id = stateBlock->id, i](const string &)
+                           lambda = [def](const string &)
                            {
                               float value;
-                              getter(id, i, &value);
+                              def.GetState(def.callContext, &value);
                               return value;
                            };
                            break;
@@ -185,7 +193,9 @@ ResURIResolver::SegDisplayState ResURIResolver::GetSegDisplayState(const string 
             {
                if (uri.authority.host == "default")
                {
-                  // Which definitions do we want to give for this (if any) ?
+                  // TODO We just get the first display in the list which highly depends on the setup. Implement something more stable based on the available displays.
+                  if (!sources.empty())
+                     endpoint = sources.back().groupId.endpointId;
                }
                else
                {
@@ -203,22 +213,15 @@ ResURIResolver::SegDisplayState ResURIResolver::GetSegDisplayState(const string 
          segCacheLambda lambda = nullptr;
          if (uri.path == "/seg")
          {
-            auto resIdPart = uri.query.find("id"s);
             int resId = 0;
-            if (resIdPart != uri.query.end() && try_parse_int(resIdPart->second, resId))
+            if (auto resIdPart = uri.query.find("id"s); resIdPart != uri.query.end() && try_parse_int(resIdPart->second, resId))
             {
-               const SegSrcId *segSource = m_segSources->With(
-                  [endpoint, resId, &lambda](const std::vector<SegSrcId> &sources)
-                  {
-                     auto segSrc
-                        = std::ranges::find_if(sources.begin(), sources.end(), [endpoint, resId](const SegSrcId &src) { return src.id.endpointId == endpoint && src.id.resId == resId; });
-                     return segSrc == sources.end() ? nullptr : std::to_address(segSrc);
-                  });
+               auto segSrc = std::ranges::find_if(sources.begin(), sources.end(), [endpoint, resId](const SegSrcId &src) { return src.id.endpointId == endpoint && src.id.resId == resId; });
+               const SegSrcId *segSource = segSrc == sources.end() ? nullptr : std::to_address(segSrc);
                if (segSource)
                {
-                  auto subIdPart = uri.query.find("id"s);
                   int subId = 0;
-                  if (subIdPart != uri.query.end())
+                  if (auto subIdPart = uri.query.find("sub"s); subIdPart != uri.query.end())
                   {
                      if (try_parse_int(subIdPart->second, subId) && subId < static_cast<int>(segSource->nElements))
                      {
@@ -228,14 +231,14 @@ ResURIResolver::SegDisplayState ResURIResolver::GetSegDisplayState(const string 
                         subSegSrc.elementType[0] = segSource->elementType[subId];
                         lambda = [segSource, subSegSrc, subId](const string &)
                         {
-                           SegDisplayFrame state = segSource->GetState(segSource->id);
+                           SegDisplayFrame state = segSource->GetState(segSource->callContext);
                            return SegDisplayState { &subSegSrc, { state.frameId, state.frame + subId * 16 } };
                         };
                      }
                   }
                   else
                   {
-                     lambda = [segSource](const string &) { return SegDisplayState { segSource, segSource->GetState(segSource->id) }; };
+                     lambda = [segSource](const string &) { return SegDisplayState { segSource, segSource->GetState(segSource->callContext) }; };
                   }
                }
             }
@@ -329,12 +332,28 @@ ResURIResolver::DisplayState ResURIResolver::GetDisplayState(const string &link)
                if (plugin)
                {
                   int resId = 0;
-                  if (auto resIdPart = uri.query.find("id"s); resIdPart != uri.query.end())
-                     try_parse_int(resIdPart->second, resId);
-
-                  auto source = std::ranges::find_if(sources.begin(), sources.end(), [plugin, resId](const DisplaySrcId &cd) { return cd.id.endpointId == plugin && cd.id.resId == resId; });
-                  if (source != sources.end())
-                     displaySource = std::to_address(source);
+                  if (auto resIdPart = uri.query.find("id"s); resIdPart != uri.query.end() && try_parse_int(resIdPart->second, resId))
+                  {
+                     auto source = std::ranges::find_if(sources, [plugin, resId](const DisplaySrcId &cd) { return cd.id.endpointId == plugin && cd.id.resId == resId; });
+                     if (source != sources.end())
+                        displaySource = std::to_address(source);
+                  }
+                  else
+                  {
+                     // No id: select first source from selected endpoint
+                     auto source = sources.end();
+                     uint32_t bestResId = UINT32_MAX;
+                     for (auto it = sources.begin(); it != sources.end(); ++it)
+                     {
+                        if (it->id.endpointId == plugin && (source == sources.end() || it->id.resId < bestResId))
+                        {
+                           source = it;
+                           bestResId = it->id.resId;
+                        }
+                     }
+                     if (source != sources.end())
+                        displaySource = std::to_address(source);
+                  }
                }
             }
 
@@ -355,7 +374,7 @@ ResURIResolver::DisplayState ResURIResolver::GetDisplayState(const string &link)
             }
 
             if (displaySource != nullptr)
-               lambda = [displaySource](const string &) { return DisplayState { displaySource, displaySource->GetRenderFrame(displaySource->id) }; };
+               lambda = [displaySource](const string &) { return DisplayState { displaySource, displaySource->GetRenderFrame(displaySource->callContext) }; };
          }
 
          if (lambda == nullptr)

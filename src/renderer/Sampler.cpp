@@ -20,6 +20,9 @@ Sampler::Sampler(RenderDevice* rd, string name, std::shared_ptr<const BaseTextur
    , m_width(surf->width())
    , m_height(surf->height())
 {
+   // Callers can substitute RenderDevice::m_fallbackTexture, so there is (mostly) something to upload
+   assert(surf != nullptr);
+
 #if defined(ENABLE_BGFX)
    switch (surf->m_format)
    {
@@ -36,8 +39,7 @@ Sampler::Sampler(RenderDevice* rd, string name, std::shared_ptr<const BaseTextur
    case BaseTexture::RGBA_FP32: m_bgfx_format = bgfx::TextureFormat::Enum::RGBA32F; break;
    default: assert(false); // Unsupported texture format
    }
-   if (surf)
-      UpdateTexture(surf, force_linear_rgb);
+   UpdateTexture(surf, force_linear_rgb);
 
 #elif defined(ENABLE_OPENGL)
    m_rd->m_curTextureUpdates++;
@@ -378,6 +380,7 @@ void Sampler::Unbind()
 void Sampler::UpdateTexture(std::shared_ptr<const BaseTexture> surf, const bool force_linear_rgb)
 {
    assert(m_ownTexture);
+   assert(surf != nullptr); // Same invariant as the constructor: callers can substitute the fallback texture
    m_rd->m_curTextureUpdates++;
 
 #if defined(ENABLE_BGFX)

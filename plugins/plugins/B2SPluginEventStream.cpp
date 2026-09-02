@@ -36,7 +36,10 @@ B2SPluginEventStream::B2SPluginEventStream(const MsgPluginAPI* msgApi, uint32_t 
                  return !gameId.starts_with(pinmamePrefix) && !gameId.starts_with(b2sPrefix);
               });
         },
-        []() { },
+        [this]() {
+           if (m_stateSources.IsSubscribed())
+              m_stateSources.Unsubscribe();
+        },
         [this]()
         {
            m_controllers.With(
@@ -58,11 +61,13 @@ B2SPluginEventStream::B2SPluginEventStream(const MsgPluginAPI* msgApi, uint32_t 
                  }
               });
            OnSegSrcChanged(m_onSegSrcChangedId, this, nullptr);
-           m_stateSources.SelectItems(true);
+           if (m_pinmameEndPoint != 0)
+              m_stateSources.Subscribe();
         })
    , m_stateSources(
         msgApi, endpointId, CTLPI_STATE_GET_SRC_MSG, CTLPI_STATE_ON_SRC_CHG_MSG,
-        [this](std::vector<StateSrcId>& stateSources) { std::erase_if(stateSources, [this](const StateSrcId& src) { return src.id.endpointId != m_pinmameEndPoint; }); }, nullptr,
+        [this](std::vector<StateSrcId>& stateSources) { std::erase_if(stateSources, [this](const StateSrcId& src) { return src.id.endpointId != m_pinmameEndPoint; }); }, //
+        nullptr, // onItemsAboutToChange
         [this]()
         {
            for (auto& buffer : m_pmStates)
@@ -75,8 +80,7 @@ B2SPluginEventStream::B2SPluginEventStream(const MsgPluginAPI* msgApi, uint32_t 
    m_msgApi->SubscribeMsg(m_endpointId, m_onB2SStateChangeId, OnB2SStateChange, this);
    OnSegSrcChanged(m_onSegSrcChangedId, this, nullptr);
    OnDMDSrcChanged(m_onDmdSrcChangedId, this, nullptr);
-   m_controllers.SelectItems(true);
-   m_stateSources.SelectItems(true);
+   m_controllers.Subscribe();
 
    m_thread = std::thread(&B2SPluginEventStream::StatePollingThread, this);
 }
@@ -86,6 +90,9 @@ B2SPluginEventStream::~B2SPluginEventStream()
    m_isRunning = false;
    if (m_thread.joinable())
       m_thread.join();
+
+   m_controllers.Unsubscribe();
+   assert(!m_stateSources.IsSubscribed());
 
    m_msgApi->UnsubscribeMsg(m_onSegSrcChangedId, OnSegSrcChanged, this);
    m_msgApi->UnsubscribeMsg(m_onDmdSrcChangedId, OnDMDSrcChanged, this);
@@ -185,7 +192,7 @@ void B2SPluginEventStream::StatePollingThread()
       // D: DMD frame identification
       if (m_dmdId.id.id != 0)
       {
-         DisplayFrame dmdFrame = m_dmdId.GetIdentifyFrame(m_dmdId.id);
+         DisplayFrame dmdFrame = m_dmdId.GetIdentifyFrame(m_dmdId.callContext);
          if (dmdFrame.frame && dmdFrame.frameId != m_lastDmdFrameId)
          {
             m_lastDmdFrameId = dmdFrame.frameId;
@@ -203,7 +210,7 @@ void B2SPluginEventStream::StatePollingThread()
       int segDisplayIndex = 0;
       for (const auto& segSrc : m_pmSegSrc)
       {
-         if (const SegDisplayFrame segFrame = segSrc.GetState(segSrc.id); segFrame.frameId != m_pmLastSegFrameId[segIndex])
+         if (const SegDisplayFrame segFrame = segSrc.GetState(segSrc.callContext); segFrame.frameId != m_pmLastSegFrameId[segIndex])
          {
             m_pmLastSegFrameId[segIndex] = segFrame.frameId;
             for (unsigned int i = 0; i < segSrc.nElements; i++)
@@ -263,16 +270,17 @@ void B2SPluginEventStream::StatePollingThread()
             for (unsigned int i = 0; i < src.nStates; i++)
             {
                int state = 0;
+               auto& def = src.stateDefs[i];
                if (src.stateDefs[i].dataFormat == CTLPI_STATE_FORMAT_UINT8 && src.stateDefs[i].GetState != nullptr)
                {
                   uint8_t byteState = 0;
-                  src.stateDefs[i].GetState(src.id, i, &byteState);
+                  def.GetState(def.callContext, &byteState);
                   state = static_cast<int>(byteState);
                }
                else if (src.stateDefs[i].dataFormat == CTLPI_STATE_FORMAT_INT32 && src.stateDefs[i].GetState != nullptr) // For PinMAME Mechs
                {
                   int32_t int32State = 0;
-                  src.stateDefs[i].GetState(src.id, i, &int32State);
+                  def.GetState(def.callContext, &int32State);
                   state = static_cast<int>(int32State);
                }
                else
