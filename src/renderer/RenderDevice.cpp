@@ -2917,21 +2917,13 @@ void RenderDevice::PresentKmsWindows()
             // queued and is retried next frame; its previous buffer remains on scanout.
             if (wndIdx == 0)
             {
-               // Mailbox, not FIFO: with fenced commits the latch happens a vblank after the GPU
-               // finishes, and BLOCKING for it self-limited the loop to the 42-48 fps band. If the
-               // display is still busy with the previous flip, keep the slot queued and retry next
-               // frame -- the render loop free-runs and the display latches whatever is newest,
-               // exactly the aux windows' semantics.
+               // Blocking present, by measurement: the mailbox variant (commit only when idle,
+               // retry next frame) dropped TAF from 42-48 to 35-40 on device -- the freed loop
+               // outran the display and the queue/rotation interaction fell behind. The drain
+               // wait doubles as the frame pacer.
                const uint64_t tDrain = usec();
-               const VPX::Kms::WindowPresenter::OwnedPresentResult pr
-                  = presenter.PresentOwnedFbIfIdle(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight());
+               const bool ok = presenter.PresentOwnedFb(slot.fbId, wnd->GetPixelWidth(), wnd->GetPixelHeight());
                s_drainWaitUs += usec() - tDrain;
-               if (pr == VPX::Kms::WindowPresenter::OwnedPresentResult::Busy)
-               {
-                  s_pfQueueEmpty += 0; // no-op; busy skips are visible as commit-count dips
-                  continue; // deferred, retry next frame; previous buffer stays on scanout
-               }
-               const bool ok = pr == VPX::Kms::WindowPresenter::OwnedPresentResult::Committed;
                if (ok)
                {
                   s_pfCommits++; // frozen-playfield probe
