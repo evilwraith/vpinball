@@ -556,6 +556,15 @@ Window::DisplayConfig Window::GetDisplayConfig(const string& display)
          selectedDisplay = dispConf;
          break;
       }
+      // Legacy ini compatibility: settings written before displayId existed store the bare SDL
+      // display name ("DSI-2"), while displayId is now "name [x, y]". Without this, every
+      // pre-existing config fails to match and all windows pile onto the primary display
+      // (observed on the AtGames cabinets, whose inis are long-lived).
+      if (dispConf.displayName == display)
+      {
+         selectedDisplay = dispConf;
+         break;
+      }
       if (dispConf.isPrimary) // Otherwise, try to default to the primary display
          selectedDisplay = dispConf;
    }
