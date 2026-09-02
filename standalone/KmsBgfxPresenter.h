@@ -297,6 +297,103 @@ inline void ProbeScanoutRotation(int drmFd, uint32_t crtcId, uint32_t fbId, uint
 }
 
 // One presenter per KMSDRM output window.
+// Ground truth for GPU completion: each owned commit's IN_FENCE_FD signals when the GPU finishes
+// the frame that buffer holds. A watcher thread poll()s dup'd fence fds and logs the
+// commit->signal latency distribution every ~5 s. No timer queries (DVFS-proof), no inference:
+// this is when the GPU was actually done.
+class FenceWatcher final
+{
+public:
+   static FenceWatcher& Get()
+   {
+      static FenceWatcher s_instance;
+      return s_instance;
+   }
+
+   void Watch(const int fd)
+   {
+      if (fd < 0)
+         return;
+      {
+         std::lock_guard<std::mutex> guard(m_mutex);
+         if (m_pending.size() >= 32) // deep backlog = something is wedged; do not grow unbounded
+         {
+            close(fd);
+            return;
+         }
+         m_pending.push_back({ fd, NowUs() });
+      }
+      m_cv.notify_one();
+      if (!m_thread.joinable())
+      {
+         std::lock_guard<std::mutex> guard(m_mutex);
+         if (!m_thread.joinable())
+            m_thread = std::thread(&FenceWatcher::ThreadMain, this);
+      }
+   }
+
+private:
+   struct Pending { int fd; uint64_t submitUs; };
+
+   static uint64_t NowUs()
+   {
+      struct timespec ts;
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      return uint64_t(ts.tv_sec) * 1000000ull + uint64_t(ts.tv_nsec) / 1000ull;
+   }
+
+   void ThreadMain()
+   {
+      std::vector<Pending> local;
+      for (;;)
+      {
+         {
+            std::unique_lock<std::mutex> guard(m_mutex);
+            m_cv.wait_for(guard, std::chrono::milliseconds(200), [this]() { return !m_pending.empty(); });
+            for (const Pending& p : m_pending)
+               local.push_back(p);
+            m_pending.clear();
+         }
+         for (size_t i = 0; i < local.size();)
+         {
+            struct pollfd pfd { local[i].fd, POLLIN, 0 };
+            const int r = poll(&pfd, 1, 0);
+            if (r > 0)
+            {
+               const uint64_t lat = NowUs() - local[i].submitUs;
+               m_sumUs += lat;
+               m_maxUs = std::max(m_maxUs, lat);
+               ++m_count;
+               close(local[i].fd);
+               local.erase(local.begin() + (long)i);
+            }
+            else
+               ++i;
+         }
+         if (!local.empty())
+         {
+            // Wait on the oldest outstanding fence so signals are timestamped promptly.
+            struct pollfd pfd { local[0].fd, POLLIN, 0 };
+            poll(&pfd, 1, 5);
+         }
+         const uint64_t now = NowUs();
+         if (m_count > 0 && now - m_lastLogUs > 5000000ull)
+         {
+            m_lastLogUs = now;
+            PLOGI.printf("[4kpDebug][fence_watch] %llu commits: gpu done %.2f ms after commit (mean), %.2f max",
+               (unsigned long long)m_count, 0.001 * double(m_sumUs) / double(m_count), 0.001 * double(m_maxUs));
+            m_sumUs = 0; m_maxUs = 0; m_count = 0;
+         }
+      }
+   }
+
+   std::mutex m_mutex;
+   std::condition_variable m_cv;
+   std::vector<Pending> m_pending;
+   std::thread m_thread;
+   uint64_t m_sumUs = 0, m_maxUs = 0, m_count = 0, m_lastLogUs = 0;
+};
+
 class WindowPresenter
 {
 public:
@@ -823,9 +920,15 @@ public:
       if (req)
          drmModeAtomicFree(req);
 
-      // Contract 1, unconditionally, before any branch on ret.
+      // Contract 1, unconditionally, before any branch on ret. The watcher takes a dup first:
+      // the fence fd is ground-truth GPU completion (no timer queries, no DVFS lies), and the
+      // commit->signal latency histogram is the direct measurement of when the GPU actually
+      // finishes each frame -- the number every pacing theory so far has had to infer.
       if (fenceFd >= 0)
+      {
+         FenceWatcher::Get().Watch(dup(fenceFd));
          close(fenceFd);
+      }
 
       if (ret != 0)
       {
