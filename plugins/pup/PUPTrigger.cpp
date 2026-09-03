@@ -193,7 +193,11 @@ PUPTrigger* PUPTrigger::CreateFromCSV(PUPScreen* pScreen, const string& line)
       playAction = PlayAction::Loop;
    else if (StrCompareNoCase(triggerPlayAction, "SplashReset"s))
       playAction = PlayAction::SplashReset;
-   else if (StrCompareNoCase(triggerPlayAction, "SplashReturn"s))
+   // "SplashReturn" is the wiki-documented token; "SplashResume" is the equivalent spelling the
+   // scripting API uses (ptSplashResume=3) and what real packs actually emit, so matching only
+   // "SplashReturn" degraded every real splash trigger to Normal and lost the displaced-clip
+   // resume. Accept both spellings.
+   else if (StrCompareNoCase(triggerPlayAction, "SplashResume"s) || StrCompareNoCase(triggerPlayAction, "SplashReturn"s))
       playAction = PlayAction::SplashReturn;
    else if (StrCompareNoCase(triggerPlayAction, "StopPlayer"s))
       playAction = PlayAction::StopPlayer;
