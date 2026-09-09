@@ -122,15 +122,20 @@ public:
    void PredictInternal(uint64_t timeNs)
    {
       const uint64_t deltaNs = timeNs - m_timeNs;
-      float remainingDt = static_cast<float>(static_cast<double>(deltaNs) * 1.0e-9);
-
-      while (remainingDt > 0.0f)
+      // Bounded, integer-driven catch-up. A float countdown (remainingDt -= dt) can never reach zero
+      // once the gap exceeds ~16 000 s: the float ULP grows past m_maxDt and the subtraction rounds
+      // back to the same value, so one out-of-band sensor timestamp spins the accelerometer thread
+      // forever and the player hangs in its join on exit. Beyond kMaxCatchUpNs the filter re-anchors.
+      constexpr uint64_t kMaxCatchUpNs = 2000000000ULL;
+      const uint64_t stepNs = std::max<uint64_t>(1, static_cast<uint64_t>(static_cast<double>(m_config.m_maxDt) * 1.0e9));
+      const uint64_t spanNs = std::min(deltaNs, kMaxCatchUpNs);
+      uint64_t doneNs = 0;
+      while (doneNs < spanNs)
       {
-         const float dt = std::min(remainingDt, m_config.m_maxDt);
-         PredictStep(dt);
-         remainingDt -= dt;
+         const uint64_t n = std::min(stepNs, spanNs - doneNs);
+         PredictStep(static_cast<float>(static_cast<double>(n) * 1.0e-9));
+         doneNs += n;
       }
-
       m_timeNs = timeNs;
    }
 
