@@ -27,8 +27,6 @@ public:
    void Init(IHaveDragPoints *pihdp, const float x, const float y, const float z, const bool smooth);
 
    // From ISelect
-   void UIRenderPass1(Sur *const psur) final { /* handled by owner */ }
-   void UIRenderPass2(Sur *const psur) final { /* handled by owner */ }
    void OnLButtonDown(int x, int y) final;
    void OnLButtonUp(int x, int y) final;
    void MoveOffset(const float dx, const float dy) final;
@@ -44,8 +42,6 @@ public:
    void DoCommand(int icmd, int x, int y) final;
 #endif
 
-   void SetSelectFormat(Sur *psur) final;
-   void SetMultiSelectFormat(Sur *psur) final;
    IEditable *GetIEditable() final;
    const IEditable *GetIEditable() const final;
    PinTable *GetPTable() final { return GetIEditable()->GetPTable(); }

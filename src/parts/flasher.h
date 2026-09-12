@@ -113,8 +113,6 @@ public:
 
    void ClearForOverwrite() final;
 
-   void RenderBlueprint(Sur *psur, const bool solid) final;
-
    void FlipY(const Vertex2D& pvCenter) final;
    void FlipX(const Vertex2D& pvCenter) final;
    void Rotate(const float ang, const Vertex2D &pvCenter, const bool useElementCenter) final;
@@ -173,10 +171,12 @@ public:
    bool m_inPlayState = false;
 
    std::shared_ptr<BaseTexture> m_dmdFrame = nullptr; // DMD defined through script API
-   unsigned int m_dmdFrameId = 0;
+   std::atomic_uint m_dmdFrameId = 0;
+
+public:
+   void InitShape();
 
 private:
-   void InitShape();
    void UpdateCenter();
    void UploadRenderFrame(const PinballPlugin::ResURIResolver::DisplayState& display);
 
@@ -202,7 +202,7 @@ private:
    HWND m_videoCapHwnd = nullptr;
    std::shared_ptr<BaseTexture> m_videoCapTex = nullptr;
 
-   int2 m_dmdSize = int2(0,0);
+   int2 m_dmdSize = int2(0,0); // dmd size is actually commited when pixels are commited
 
    std::shared_ptr<BaseTexture> m_renderFrame = nullptr;
 

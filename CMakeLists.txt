@@ -316,6 +316,7 @@ if(PLATFORM STREQUAL "windows")
       /w44005
       /Zc:__cplusplus
       /std:c++20
+      /Zi
       $<$<NOT:$<STREQUAL:${ARCH},x64>>:/arch:SSE2>
    )
 
@@ -376,6 +377,7 @@ if(PLATFORM STREQUAL "windows")
       $<$<CONFIG:Release>:/OPT:REF>
       $<$<CONFIG:Release>:/OPT:ICF>
       $<$<CONFIG:Release>:/LTCG>
+      $<$<CONFIG:Release>:/DEBUG:FULL>
       $<$<CONFIG:Release>:/DYNAMICBASE:NO>
       $<IF:$<STREQUAL:${ARCH},x64>,$<$<CONFIG:Release>:/SAFESEH:NO>,/SAFESEH:NO>
       $<$<NOT:$<STREQUAL:${ARCH},x64>>:/LARGEADDRESSAWARE>
@@ -439,6 +441,15 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
+
+      src/utils/StackTrace.cpp
+      src/utils/StackTrace.h
+      src/utils/MemoryStatus.cpp
+      src/utils/MemoryStatus.h
+      src/utils/BlackBox.cpp
+      src/utils/BlackBox.h
+      src/utils/CrashHandler.cpp
+      src/utils/CrashHandler.h
    )
 
    target_include_directories(vpinball PUBLIC
@@ -447,6 +458,7 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atl/include
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atlmfc/include
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/wine/include
+      ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/wine/include/msvcrt
       src
       plugins
    )
@@ -463,10 +475,13 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
       ENABLE_BGFX
       $<IF:$<CONFIG:Debug>,BX_CONFIG_DEBUG=1,BX_CONFIG_DEBUG=0>
+
+      VPX_STANDALONE_CRASH_HANDLER
    )
 
    target_compile_options(vpinball PUBLIC
       -mssse3
+      $<$<CONFIG:Release>:-g1>
       $<$<CXX_COMPILER_ID:GNU>:
          -ffast-math
          -ffp-contract=off
@@ -492,6 +507,8 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       hidapi64
       openxr_loader64
       winevbs64
+      backtrace
+      dbghelp
    )
 
    target_link_options(vpinball PUBLIC

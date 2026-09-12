@@ -164,115 +164,6 @@ void Flasher::WriteRegDefaults()
 #undef LinkProp
 }
 
-void Flasher::UIRenderPass1(Sur * const psur)
-{
-   if (m_vdpoint.empty())
-      InitShape();
-
-   psur->SetFillColor(m_ptable->RenderSolid() ? m_vpinball->m_fillColor: -1);
-   psur->SetObject(this);
-   // Don't want border color to be over-ridden when selected - that will be drawn later
-   psur->SetBorderColor(-1, false, 0);
-
-   vector<RenderVertex> vvertex;
-   GetRgVertex(vvertex);
-   if (!m_ptable->RenderSolid() || !m_d.m_displayTexture)
-   {
-      psur->Polygon(vvertex);
-   }
-   else if (const Texture *const ppi = m_ptable->GetImage(m_d.m_szImageA); ppi && ppi->GetGDIBitmap())
-   {
-      if (m_d.m_imagealignment == ImageModeWrap)
-      {
-         float _minx = FLT_MAX;
-         float _miny = FLT_MAX;
-         float _maxx = -FLT_MAX;
-         float _maxy = -FLT_MAX;
-         for (const auto& v : vvertex)
-         {
-            if (v.x < _minx) _minx = v.x;
-            if (v.x > _maxx) _maxx = v.x;
-            if (v.y < _miny) _miny = v.y;
-            if (v.y > _maxy) _maxy = v.y;
-         }
-
-         psur->PolygonImage(vvertex, ppi->GetGDIBitmap(), _minx, _miny, _minx + (_maxx - _minx), _miny + (_maxy - _miny), ppi->m_width, ppi->m_height);
-      }
-      else
-      {
-         psur->PolygonImage(vvertex, ppi->GetGDIBitmap(), m_ptable->m_left, m_ptable->m_top, m_ptable->m_right, m_ptable->m_bottom, ppi->m_width, ppi->m_height);
-      }
-   }
-   else
-   {
-      psur->Polygon(vvertex);
-   }
-}
-
-void Flasher::UIRenderPass2(Sur * const psur)
-{
-   psur->SetFillColor(-1);
-   psur->SetBorderColor(RGB(0, 0, 0), false, 0);
-   psur->SetObject(this); // For selected formatting
-   psur->SetObject(nullptr);
-
-   vector<RenderVertex> vvertex; //!! check/reuse from UIRenderPass1
-   GetRgVertex(vvertex);
-   psur->Polygon(vvertex);
-
-   // Except for flasher mode, shape is simplified before rendering into its bounding rectangle
-   if (m_d.m_renderMode != FlasherData::RenderMode::FLASHER)
-   {
-      float _minx = FLT_MAX;
-      float _miny = FLT_MAX;
-      float _maxx = -FLT_MAX;
-      float _maxy = -FLT_MAX;
-      for (const auto& v : vvertex)
-      {
-         if (v.x < _minx) _minx = v.x;
-         if (v.x > _maxx) _maxx = v.x;
-         if (v.y < _miny) _miny = v.y;
-         if (v.y > _maxy) _maxy = v.y;
-      }
-      psur->Rectangle(_minx, _miny, _maxx, _maxy);
-   }
-
-   // if the item is selected then draw the dragpoints (or if we are always to draw dragpoints)
-   bool drawDragpoints = ((m_selectstate != SelectState::NotSelected) || m_vpinball->m_alwaysDrawDragPoints);
-   if (!drawDragpoints)
-   {
-      // if any of the dragpoints of this object are selected then draw all the dragpoints
-      for (const auto& pdp : m_vdpoint)
-      {
-         if (pdp->m_selectstate != SelectState::NotSelected)
-         {
-            drawDragpoints = true;
-            break;
-         }
-      }
-   }
-
-   if (drawDragpoints)
-   {
-      psur->SetFillColor(-1);
-      for (const auto &pdp : m_vdpoint)
-      {
-         psur->SetBorderColor(pdp->m_dragging ? RGB(0, 255, 0) : RGB(255, 0, 0), false, 0);
-         psur->SetObject(pdp);
-         psur->Ellipse2(pdp->m_v.x, pdp->m_v.y, 8);
-      }
-   }
-
-   // Little cross at the object center
-   psur->Line(m_d.m_vCenter.x - 10.0f, m_d.m_vCenter.y, m_d.m_vCenter.x + 10.0f, m_d.m_vCenter.y);
-   psur->Line(m_d.m_vCenter.x, m_d.m_vCenter.y - 10.0f, m_d.m_vCenter.x, m_d.m_vCenter.y + 10.0f);
-}
-
-void Flasher::RenderBlueprint(Sur *psur, const bool solid)
-{
-}
-
-
 void Flasher::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
    if (isUI)
@@ -862,14 +753,17 @@ STDMETHODIMP Flasher::put_DMDPixels(VARIANT pVal) // assumes VT_UI1 as input //!
    if (!SafeArrayHasAtLeast(psa, size))
       return E_FAIL;
 
-   if (m_dmdFrame != nullptr && (m_dmdFrame->width() != m_dmdSize.x || m_dmdFrame->height() != m_dmdSize.y || m_dmdFrame->m_format != BaseTexture::BW_FP32))
+   const bool unAdvertise = m_dmdFrame != nullptr && (m_dmdFrame->width() != m_dmdSize.x || m_dmdFrame->height() != m_dmdSize.y || m_dmdFrame->m_format != BaseTexture::BW_FP32);
+   if (unAdvertise)
       g_pplayer->m_pluginAPI.OnDMDUpdated(this, nullptr);
+   const BaseTexture *const prev = g_pplayer->m_dmdFrame.get();
    BaseTexture::Update(m_dmdFrame, m_dmdSize.x, m_dmdSize.y, BaseTexture::BW_FP32, nullptr);
+   assert(unAdvertise || prev == nullptr || prev == g_pplayer->m_dmdFrame.get()); // Update() must not change the pointer as it would break async requests from Pinball Plugin API
    // Convert from linear [0..100] luminance
    VARIANT *p;
    SafeArrayAccessData(psa, (void **)&p);
    float *const data = static_cast<float*>(m_dmdFrame->data());
-   for (int ofs = 0; ofs < size; ++ofs)
+   for (int ofs = 0; ofs < size; ++ofs) // To be lock free, we accept a minor race condition here as we are writing the new frame while it may be read through the plugin API
       data[ofs] = (float)V_UI4(&p[ofs]) * (float)(1.0 / 100.);
    SafeArrayUnaccessData(psa);
    m_dmdFrameId++;
@@ -887,15 +781,21 @@ STDMETHODIMP Flasher::put_DMDColoredPixels(VARIANT pVal) //!! assumes VT_UI4 as 
    if (!SafeArrayHasAtLeast(psa, size))
       return E_FAIL;
 
+   const bool unAdvertise = m_dmdFrame != nullptr && (m_dmdFrame->width() != m_dmdSize.x || m_dmdFrame->height() != m_dmdSize.y || m_dmdFrame->m_format != BaseTexture::SRGBA);
+   if (unAdvertise)
+      g_pplayer->m_pluginAPI.OnDMDUpdated(this, nullptr);
+   const BaseTexture *const prev = g_pplayer->m_dmdFrame.get();
    BaseTexture::Update(m_dmdFrame, m_dmdSize.x, m_dmdSize.y, BaseTexture::SRGBA, nullptr);
-   uint32_t *const __restrict data = reinterpret_cast<uint32_t *>(m_dmdFrame->data());
+   assert(unAdvertise || prev == nullptr || prev == g_pplayer->m_dmdFrame.get()); // Update() must not change the pointer as it would break async requests from Pinball Plugin API
    // gamma compressed [0..255] sRGB
    VARIANT *p;
    SafeArrayAccessData(psa, (void **)&p);
-   for (int ofs = 0; ofs < size; ++ofs)
+   uint32_t *const __restrict data = reinterpret_cast<uint32_t *>(m_dmdFrame->data());
+   for (int ofs = 0; ofs < size; ++ofs) // To be lock free, we accept a minor race condition here as we are writing the new frame while it may be read through the plugin API
       data[ofs] = V_UI4(&p[ofs]) | 0xFF000000u;
    SafeArrayUnaccessData(psa);
    m_dmdFrameId++;
+   g_pplayer->m_pluginAPI.OnDMDUpdated(this, m_dmdFrame);
    return S_OK;
 }
 
@@ -1284,6 +1184,32 @@ void Flasher::Render(const unsigned int renderMask)
 
    const vec4 color = convertColor(m_d.m_color, alpha * m_d.m_intensity_scale / 100.0f);
    const float clampedModulateVsAdd = min(max(m_d.m_modulate_vs_add, 0.00001f), 0.9999f); // avoid 0, as it disables the blend and avoid 1 as it looks not good with day->night changes
+
+   // Blend state of the DMD and Display render modes (Alpha Segment uses max blending instead, see below). Select
+   // whether the selected shader implements the additive blend encoding, returns whether it ends up being used, which its setup needs to know as well
+   auto SetupDisplayBlend = [this](const bool canAddModulate) -> bool
+   {
+      RenderDevice *const rd = m_renderer->m_renderDevice;
+      // A 'modulate vs add' of 1 (or above) is a fully opaque display (which allows to skip blending)
+      if (m_d.m_modulate_vs_add >= 1.f)
+      {
+         rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+         return false;
+      }
+      if (m_d.m_addBlend && canAddModulate)
+      {
+         // Additive blending which also modulates (darkens) the background, using the same scheme as the 'normal' Flasher
+         // render mode above: the shader packs both terms into its single output, see fs_display.sc
+         rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
+         rd->SetRenderState(RenderState::SRCBLEND, RenderState::SRC_ALPHA);
+         rd->SetRenderState(RenderState::DESTBLEND, RenderState::INVSRC_COLOR);
+         rd->SetRenderState(RenderState::BLENDOP, RenderState::BLENDOP_REVSUBTRACT);
+         return true;
+      }
+      rd->EnableAlphaBlend(m_d.m_addBlend);
+      return false;
+   };
+
    switch (m_d.m_renderMode)
    {
       case FlasherData::FLASHER:
@@ -1365,23 +1291,21 @@ void Flasher::Render(const unsigned int renderMask)
             // Display mode below is the intended way to show these
             PinballPlugin::ResURIResolver::DisplayState dmd { nullptr };
             if (!m_d.m_imageSrcLink.empty())
-               dmd = g_pplayer->m_resURIResolver.GetDmdDisplayState(m_d.m_imageSrcLink);
+               dmd = g_pplayer->m_resURIResolver.GetDisplayState(m_d.m_imageSrcLink);
             if (dmd.state.frame == nullptr)
-               dmd = g_pplayer->m_resURIResolver.GetDmdDisplayState("ctrl://default/display"s);
+               dmd = g_pplayer->m_resURIResolver.GetDisplayState("ctrl://default/display?dmd_only=1"s);
             if (dmd.state.frame != nullptr)
                UploadRenderFrame(dmd);
          }
          if (m_renderFrame != nullptr)
          {
             Texture *const glass = m_ptable->GetImage(m_d.m_szImageA);
-            if (m_d.m_modulate_vs_add < 1.f)
-               m_renderer->m_renderDevice->EnableAlphaBlend(m_d.m_addBlend);
-            else
-               m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+            const int dmdProfile = clamp(m_d.m_renderStyle, 0, 6); // 7 DMD profiles, see Renderer::m_dmdDotColor & co
+            // The legacy renderer has no additive blend encoding, it outputs a plain alpha blended color
+            const bool addModulate = SetupDisplayBlend(!m_renderer->IsLegacyDMDRenderer(dmdProfile));
             m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
             const vec3 dotTint = m_renderFrame->m_format == BaseTexture::BW_FP32 ? vec3(color.x, color.y, color.z) : vec3(1.f, 1.f, 1.f);
-            const int dmdProfile = clamp(m_d.m_renderStyle, 0, 7);
-            m_renderer->SetupDMDRender(dmdProfile, m_desktopBackdrop, dotTint, color.w, m_renderFrame, m_d.m_modulate_vs_add, m_desktopBackdrop ? Renderer::Reinhard : Renderer::Linear,
+            m_renderer->SetupDMDRender(dmdProfile, m_desktopBackdrop, dotTint, color.w, m_renderFrame, m_d.m_modulate_vs_add, addModulate, m_desktopBackdrop ? Renderer::Reinhard : Renderer::Linear,
                m_transformedVertices.data(), vec4(m_d.m_glassPadLeft, m_d.m_glassPadTop, m_d.m_glassPadRight, m_d.m_glassPadBottom), vec3(1.f, 1.f, 1.f), m_d.m_glassRoughness,
                glass ? glass : nullptr, vec4(0.f, 0.f, 1.f, 1.f), vec3(GetRValue(m_d.m_glassAmbient) / 255.f, GetGValue(m_d.m_glassAmbient) / 255.f, GetBValue(m_d.m_glassAmbient) / 255.f));
             // DMD flasher are rendered transparent. They used to be drawn as a separate pass after opaque parts and before other transparents.
@@ -1396,14 +1320,11 @@ void Flasher::Render(const unsigned int renderMask)
          {
             UploadRenderFrame(display);
             Texture *const glass = m_ptable->GetImage(m_d.m_szImageA);
-            if (m_d.m_modulate_vs_add < 1.f)
-               m_renderer->m_renderDevice->EnableAlphaBlend(m_d.m_addBlend);
-            else
-               m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+            const bool addModulate = SetupDisplayBlend(true);
             m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
             const vec3 crtTint = vec3(color.x, color.y, color.z);
             const int crtProfile = clamp(m_d.m_renderStyle, 0, 2);
-            m_renderer->SetupCRTRender(crtProfile, m_desktopBackdrop, crtTint, color.w, m_renderFrame, m_d.m_modulate_vs_add, m_desktopBackdrop ? Renderer::Reinhard : Renderer::Linear,
+            m_renderer->SetupCRTRender(crtProfile, m_desktopBackdrop, crtTint, color.w, m_renderFrame, m_d.m_modulate_vs_add, addModulate, m_desktopBackdrop ? Renderer::Reinhard : Renderer::Linear,
                m_transformedVertices.data(), vec4(m_d.m_glassPadLeft, m_d.m_glassPadTop, m_d.m_glassPadRight, m_d.m_glassPadBottom), vec3(1.f, 1.f, 1.f), m_d.m_glassRoughness,
                glass ? glass : nullptr, vec4(0.f, 0.f, 1.f, 1.f), vec3(GetRValue(m_d.m_glassAmbient) / 255.f, GetGValue(m_d.m_glassAmbient) / 255.f, GetBValue(m_d.m_glassAmbient) / 255.f));
             // We also apply the depth bias shift, not for backward compatibility (as display did not exist before 10.8.1) but for consistency between DMD and Display mode

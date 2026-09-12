@@ -68,6 +68,7 @@ InputManager::InputManager(Player* player)
    addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId());
 
    m_rumbleMode = g_app->m_settings.GetPlayer_RumbleMode();
+   m_rumbleFlipperContact = g_app->m_settings.GetPlayer_RumbleFlipperContact();
 
    // Load settings
    LoadDevicesFromSettings();
@@ -465,6 +466,26 @@ void InputManager::ProcessInput()
    }
 
    // Perform pending device auto detection (deferred until in game UI is available)
+   if (m_hasPendingLayoutApply)
+   {
+      m_hasPendingLayoutApply = false;
+      for (auto& device : m_inputDevices)
+      {
+         if (!device.m_hasPendingLayoutApply)
+            continue;
+         const auto noAutoLayoutId = Settings::GetRegistry().GetPropertyId("Input"s, "Device." + device.m_settingsId + ".NoAutoLayout").value();
+         if (g_app->m_settings.GetBool(noAutoLayoutId))
+            device.m_hasPendingLayoutApply = false;
+         else if (device.m_type == DeviceType::VRController)
+         {
+            // The propose-layout dialog isn't reachable in the headset before the VR controller is registered, so auto-apply
+            ApplyDefaultDeviceMapping(device.m_id);
+            device.m_hasPendingLayoutApply = false;
+         }
+         else
+            m_hasPendingLayoutApply = true;
+      }
+   }
    if (m_hasPendingLayoutApply && m_player->m_liveUI && !m_player->m_liveUI->IsOpened())
    {
       for (auto& device : m_inputDevices)
@@ -473,20 +494,6 @@ void InputManager::ProcessInput()
          {
             const uint16_t deviceId = device.m_id;
             const auto noAutoLayoutId = Settings::GetRegistry().GetPropertyId("Input"s, "Device." + device.m_settingsId + ".NoAutoLayout").value();
-            if (g_app->m_settings.GetBool(noAutoLayoutId))
-            {
-               device.m_hasPendingLayoutApply = false;
-               continue;
-            }
-
-            // For VR controllers, the propose-layout dialog isn't reachable in the headset before the VR controller is registered, so auto-apply
-            if (device.m_type == DeviceType::VRController)
-            {
-               ApplyDefaultDeviceMapping(deviceId);
-               device.m_hasPendingLayoutApply = false;
-               continue;
-            }
-
             if (m_player->m_liveUI->m_inGameUI.ProposeInputLayout(device.m_name,
                    [this, deviceId, noAutoLayoutId](bool isOk, bool isDontAskAnymore)
                    {
@@ -789,7 +796,7 @@ void InputManager::CreateInputActions()
                DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
                m_player->m_ptable->FireDispID(isPressed ? DISPID_GameEvents_KeyDown : DISPID_GameEvents_KeyUp, &dispparams);
 #ifdef __STANDALONE__
-               m_player->SetCloseState(Player::CS_CLOSE_APP);
+               m_player->SetCloseState(g_isMobile ? Player::CS_CLOSE_CAPTURE_SCREENSHOT : Player::CS_CLOSE_APP);
 #else
                m_player->SetCloseState(Player::CS_STOP_PLAY);
 #endif
@@ -1123,17 +1130,21 @@ void InputManager::PlayRumble(const float lowFrequencySpeed, const float highFre
    for (const auto& handler : m_inputHandlers)
       handler->PlayRumble(lowFrequencySpeed, highFrequencySpeed, ms_duration);
 
-   #ifdef __LIBVPINBALL__
-      if (!g_app->m_settings.GetStandalone_Haptics())
-         return;
-
-      VPinballLib::RumbleData rumbleData = {
-         (uint16_t)(saturate(lowFrequencySpeed) * 65535.f),
-         (uint16_t)(saturate(highFrequencySpeed) * 65535.f),
-         (uint32_t)ms_duration
-      };
-      VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_RUMBLE, &rumbleData);
+   #if defined(__LIBVPINBALL__) && defined(__APPLE__)
+      VPinballLib::VPinballLib::PlayRumble(saturate(lowFrequencySpeed), saturate(highFrequencySpeed), (unsigned int)ms_duration);
    #endif
+}
+
+void InputManager::PlayFlipperContactRumble(const float normalImpactSpeed)
+{
+   if (m_rumbleFlipperContact <= 0.f)
+      return;
+
+   // A relative normal velocity of roughly 17 units corresponds to a hard hit. Both motors are
+   // driven, since short pulses on the high frequency motor alone are barely noticeable on many
+   // gamepads.
+   const float impact = clamp(fabsf(normalImpactSpeed) * 0.06f, 0.05f, 1.f);
+   PlayRumble(impact * 0.8f * m_rumbleFlipperContact, impact * m_rumbleFlipperContact, 120);
 }
 
 void InputManager::Autostart(const uint32_t initialDelayMs, const uint32_t retryDelayMs)

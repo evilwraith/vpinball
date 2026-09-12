@@ -338,7 +338,10 @@ bool VPXPluginAPIImpl::IsScriptContributor(const unsigned int endpointId) const 
 void MSGPIAPI VPXPluginAPIImpl::OnScriptError(unsigned int type, const char* message)
 {
    VPXPluginAPIImpl& pi = g_pplayer->m_pluginAPI;
-   // FIXME implement in DynamicDispatch
+   static const char* typeNames[] = { "Failure", "Invalid argument", "Null pointer", "Not implemented" };
+   const char* typeName = type < std::size(typeNames) ? typeNames[type] : "Unknown error";
+   PLOGE << "Script error reported by plugin (" << typeName << "): " << (message ? message : "");
+   // FIXME implement in DynamicDispatch (raise an actual script error instead of just logging)
 }
 
 ScriptClassDef* MSGPIAPI VPXPluginAPIImpl::GetClassDef(const char* typeName)
@@ -692,6 +695,8 @@ VPXPluginAPIImpl::VPXPluginAPIImpl(MsgPI::MsgPluginManager& pluginManager)
       [this](const std::string& pluginId, MsgPI::MsgPluginManager::SettingAction action, MsgSettingDef* settingDef) { UpdateSetting(pluginId, action, settingDef); });
 
    // VPX API
+   m_api.version = 1;
+
    m_api.GetVpxInfo = GetVpxInfo;
    m_api.GetTableInfo = GetTableInfo;
 
@@ -722,10 +727,12 @@ VPXPluginAPIImpl::VPXPluginAPIImpl(MsgPI::MsgPluginManager& pluginManager)
    m_msgApi.SubscribeMsg(m_vpxPlugin->m_endpointId, m_getVPXAPIMsgId, &OnGetVPXPluginAPI, nullptr);
 
    // Logging API
+   m_loggingApi.version = 1;
    m_loggingApi.Log = PluginLog;
    m_msgApi.SubscribeMsg(m_vpxPlugin->m_endpointId, m_getLoggingAPIMsgId, &OnGetLoggingPluginAPI, nullptr);
 
    // Scriptable API
+   m_scriptableApi.version = 1;
    m_scriptableApi.RegisterScriptClass = RegisterScriptClass;
    m_scriptableApi.RegisterScriptTypeAlias = RegisterScriptTypeAlias;
    m_scriptableApi.RegisterScriptArrayType = RegisterScriptArray;

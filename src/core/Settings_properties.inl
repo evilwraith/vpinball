@@ -237,6 +237,7 @@ PropInt(Player, NumberOfTimesToShowTouchMessage, "NumberOfTimesToShowTouchMessag
 PropBool(Player, Mirror, "Mirror"s, "Mirror the table (left <-> right)"s, false);
 PropEnum(Player, CacheMode, "Cache Mode"s, "Use cache to limit stutters and speedup loading"s, int, 1, "Disabled"s, "Preload Textures"s);
 PropEnum(Player, RumbleMode, "RumbleMode"s, "Use rumble motor(s) in attached input devices"s, int, 3, "Off"s, "Table only (N/A yet)"s, "Generic only (N/A yet)"s, "Table with generic fallback"s);
+PropFloat(Player, RumbleFlipperContact, "Flipper Contact Rumble"s, "Strength of the rumble played when a ball hits a flipper, scaled by the impact speed (0 disables it)"s, 0.f, 3.f, 1.f);
 PropInt(Player, MinPhysLoopTime, "MinPhysLoopTime"s, ""s, 0, 1000, 0); // Legacy lag reduction hack (e.g. if script execution or physics takes very long, comes at the price of "slower" gameplay). Not supported by BGFX variant (due to its multithreaded loop)
 PropIntUnbounded(Player, PhysicsMaxLoops, "Physics Max Loops"s,
    "Maximum number of physics iteration above which physics engine just skip to stay playable.\nThis is somewhat hacky, override table setup, and may cause gameplay issues. This should not be used anymore."s,
@@ -274,6 +275,7 @@ PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 0, "Ena
 #else
 PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 2, "Enabled"s, "Autodetect"s, "Disabled"s);
 #endif
+PropEnum(PlayerVR, DisplayRefreshRate, "Headset Refresh Rate"s, "Refresh rate requested from the headset when supported. Lower rates give the renderer more time per frame and avoid reprojected frames on standalone headsets"s, int, 0, "Runtime default"s, "72 Hz"s, "80 Hz"s, "90 Hz"s, "120 Hz"s);
 PropFloatDyn(PlayerVR, Orientation, "View orientation"s, "VR view orientation"s, -180.f, 180.f, 0.f);
 PropFloatDyn(PlayerVR, TableX, "View Offset X"s, "VR view X offset"s, -100.f, 100.f, 0.f);
 PropFloatDyn(PlayerVR, TableY, "View Offset Y"s, "VR view Y offset"s, -100.f, 100.f, 0.f);
@@ -658,9 +660,9 @@ PropFloat(Player, ScreenHeight, "Screen Height"s, "Physical height (cm) of the d
 PropFloat(Player, ScreenInclination, "Screen Inclination"s, "Inclination (degree) of the playfield (main) screen, 0 is horizontal"s, -30.f, 30.f, 0.f);
 PropFloat(Player, LockbarWidth, "Lockbar Width"s, "Lockbar width in centimeters (measured on the cabinet)"s, 10.f, 150.f, 70.f);
 PropFloat(Player, LockbarHeight, "Lockbar Height"s, "Lockbar height in centimeters (measured on the cabinet, from ground to top of lockbar)"s, 0.f, 250.f, 85.f);
-PropFloatDyn(Player, ScreenPlayerX, "Player X"s, "Player X position in real world, expressed from the bottom center of the playfield, in centimeters"s, -30.f, 30.f, 0.f);
-PropFloatDyn(Player, ScreenPlayerY, "Player Y"s, "Player Y position in real world, expressed from the bottom center of the playfield, in centimeters"s, -70.f, 30.f, -10.f);
-PropFloatDyn(Player, ScreenPlayerZ, "Player Z"s, "Player Z position in real world, expressed from the bottom center of the playfield, in centimeters"s, 30.f, 100.f, 70.f);
+PropFloat(Player, ScreenPlayerX, "Player X"s, "Player X position in real world, expressed from the bottom center of the playfield, in centimeters"s, -30.f, 30.f, 0.f);
+PropFloat(Player, ScreenPlayerY, "Player Y"s, "Player Y position in real world, expressed from the bottom center of the playfield, in centimeters"s, -70.f, 30.f, -10.f);
+PropFloat(Player, ScreenPlayerZ, "Player Z"s, "Player Z position in real world, expressed from the bottom center of the playfield, in centimeters"s, 30.f, 100.f, 70.f);
 
 // Overall scene lighting settings
 PropBool(Player, OverrideTableEmissionScale, "Override Table Light Level"s, "Replace default table light level by a fixed/custom one"s, false);

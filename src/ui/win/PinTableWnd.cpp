@@ -15,6 +15,7 @@
 #include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "ui/win/worker.h"
+#include "ui/win/WinUIPartRegistry.h"
 
 #ifndef __STANDALONE__
 #include "ui/win/dialogs/SearchSelectDialog.h"
@@ -135,7 +136,7 @@ void PinTableWnd::SetMyScrollInfo()
 
    const CRect rc = GetClientRect();
 
-   const HitSur phs(nullptr, GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, 0, 0, nullptr);
+   const HitSur phs(GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, 0, 0, nullptr);
 
    Vertex2D rgv[2];
    rgv[0] = phs.ScreenToSurface(rc.left, rc.top);
@@ -249,7 +250,7 @@ void PinTableWnd::ExportBlueprint()
    dc.CreateDIBSection(dc.GetHDC(), &bmi, DIB_RGB_COLORS, (void **)&pbits, nullptr, 0);
 
    {
-      PaintSur psur(dc.GetHDC(), (float)bmwidth / tablewidth, tablewidth * 0.5f, tableheight * 0.5f, bmwidth, bmheight, nullptr);
+      PaintSur psur((float)bmwidth / tablewidth, tablewidth * 0.5f, tableheight * 0.5f, bmwidth, bmheight, dc.GetHDC(), this, nullptr);
 
       dc.SelectObject(static_cast<HBRUSH>(dc.GetStockObject(WHITE_BRUSH)));
       dc.PatBlt(0, 0, bmwidth, bmheight, PATCOPY);
@@ -260,7 +261,10 @@ void PinTableWnd::ExportBlueprint()
       for (const auto &ptr : m_table->GetParts())
       {
          if (ptr->m_uiVisible && ptr->GetISelect() && ptr->m_desktopBackdrop == m_vpxEditor->m_desktopBackdropView)
-            ptr->GetISelect()->RenderBlueprint(&psur, solid);
+         {
+            auto winPart = WinUIPartRegistry::Create(this, ptr);
+            winPart->RenderBlueprint(&psur, solid);
+         }
       }
    }
 
@@ -328,7 +332,10 @@ void PinTableWnd::UIRenderPass2(Sur *const psur)
    for (const auto &ptr : m_table->GetParts())
    {
       if (ptr->m_desktopBackdrop == m_vpxEditor->m_desktopBackdropView && ptr->m_uiVisible && ptr->GetISelect())
-         ptr->GetISelect()->UIRenderPass1(psur);
+      {
+         auto winPart = WinUIPartRegistry::Create(this, ptr);
+         winPart->UIRenderPass1(psur);
+      }
    }
 
    if (GetDisplayGrid() && m_vpxEditor->m_gridSize > 0)
@@ -366,7 +373,10 @@ void PinTableWnd::UIRenderPass2(Sur *const psur)
    for (const auto &ptr : m_table->GetParts())
    {
       if (ptr->m_desktopBackdrop == m_vpxEditor->m_desktopBackdropView && ptr->m_uiVisible && ptr->GetISelect())
-         ptr->GetISelect()->UIRenderPass2(psur);
+      {
+         auto winPart = WinUIPartRegistry::Create(this, ptr);
+         winPart->UIRenderPass2(psur);
+      }
    }
 
    if (m_vpxEditor->m_desktopBackdropView) // Outline of the view, for when the grid is off
@@ -473,7 +483,7 @@ void PinTableWnd::Paint(HDC hdc)
 
    if (m_dirtyDraw)
    {
-      Sur *const psur = new PaintSur(dc.GetHDC(), GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, m_table->GetSelectedItem());
+      Sur *const psur = new PaintSur(GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, dc.GetHDC(), this, m_table->GetSelectedItem());
       UIRenderPass2(psur);
 
       delete psur;
@@ -708,8 +718,8 @@ ISelect *PinTableWnd::HitTest(const int x, const int y)
 
    const CRect rc = GetClientRect();
 
-   HitSur phs(dc.GetHDC(), GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, x, y, m_table);
-   HitSur phs2(dc.GetHDC(), GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, x, y, m_table);
+   HitSur phs(GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, x, y, m_table);
+   HitSur phs2(GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, x, y, m_table);
 
    m_table->m_allHitElements.clear();
 
@@ -719,7 +729,8 @@ ISelect *PinTableWnd::HitTest(const int x, const int y)
    {
       if (ptr->m_desktopBackdrop == m_vpxEditor->m_desktopBackdropView && ptr->GetISelect())
       {
-         ptr->GetISelect()->UIRenderPass1(&phs2);
+         auto winPart = WinUIPartRegistry::Create(this, ptr);
+         winPart->UIRenderPass1(&phs2);
          ISelect *const tmp = phs2.m_pselected;
          if (FindIndexOf(m_table->m_allHitElements, tmp) == -1 && tmp != nullptr && tmp != m_table)
          {
@@ -824,7 +835,7 @@ void PinTableWnd::DoLeftButtonDown(int x, int y, bool zoomIn)
 
       const bool add = ((ksshift & 0x80000000) != 0);
 
-      if (pisel == (ISelect *)this && add)
+      if (pisel == m_table && add)
       {
          // Can not include the table in multi-select
          // and table will not be unselected, because the
@@ -889,7 +900,7 @@ void PinTableWnd::OnLeftButtonUp(int x, int y)
 
             const CRect rc = m_mdiTable->GetClientRect();
 
-            HitRectSur *const phrs = new HitRectSur(dc.GetHDC(), GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, &m_table->m_rcDragRect, &vsel);
+            HitRectSur *const phrs = new HitRectSur(GetZoom(), GetViewOffset().x, GetViewOffset().y, rc.right - rc.left, rc.bottom - rc.top, &m_table->m_rcDragRect, &vsel);
 
             // Just want one rendering pass (no UIRenderPass1) so we don't select things twice
             UIRenderPass2(phrs);
@@ -1098,6 +1109,118 @@ void PinTableWnd::FillCollectionContextMenu(CMenu &mainMenu, CMenu &colSubMenu, 
       for (size_t i = 0; i < allIndices.size(); i++)
          colSubMenu.CheckMenuItem(0x40000 + allIndices[i], MF_CHECKED);
    }
+#endif
+}
+
+void PinTableWnd::NewCollection(const HWND hwndListView, const bool fromSelection)
+{
+   CComObject<Collection> *pcol;
+   CComObject<Collection>::CreateInstance(&pcol);
+   pcol->AddRef();
+
+   pcol->m_wzName = m_table->GetUniqueName(LocalStringW(IDS_COLLECTION).m_buffer);
+
+   if (fromSelection && !m_table->MultiSelIsEmpty())
+   {
+      for (int i = 0; i < m_table->m_vmultisel.size(); i++)
+      {
+         ISelect *const pisel = m_table->m_vmultisel.ElementAt(i);
+         IEditable *const piedit = pisel->GetIEditable();
+         if (piedit)
+         {
+            if (piedit->GetISelect() == pisel) // Do this check so we don't put walls in a collection when we only have the control point selected
+            {
+               piedit->m_vCollection.push_back(pcol);
+               piedit->m_viCollection.push_back(pcol->m_visel.size());
+               pcol->m_visel.push_back(m_table->m_vmultisel.ElementAt(i));
+            }
+         }
+      }
+   }
+
+   const int index = AddListCollection(hwndListView, pcol);
+
+#ifndef __STANDALONE__
+   ListView_SetItemState(hwndListView, index, LVIS_SELECTED, LVIS_SELECTED);
+#endif
+
+   m_table->AddCollection(pcol);
+   pcol->Release();
+}
+
+int PinTableWnd::AddListCollection(HWND hwndListView, CComObject<Collection> *pcol)
+{
+#ifndef __STANDALONE__
+   LVITEM lvitem;
+   lvitem.mask = LVIF_DI_SETITEM | LVIF_TEXT | LVIF_PARAM;
+   lvitem.iItem = 0;
+   lvitem.iSubItem = 0;
+   string name = MakeString(pcol->m_wzName);
+   lvitem.pszText = name.data();
+   lvitem.lParam = (size_t)pcol;
+
+   const int index = ListView_InsertItem(hwndListView, &lvitem);
+   ListView_SetItemText_Safe(hwndListView, index, 1, std::to_string(pcol->m_visel.size()).c_str());
+   return index;
+#else
+   return 0;
+#endif
+}
+
+void PinTableWnd::ListCollections(HWND hwndListView)
+{
+   //ListView_DeleteAllItems(hwndListView);
+
+   for (int i = 0; i < m_table->m_vcollection.size(); i++)
+   {
+      CComObject<Collection> *const pcol = m_table->m_vcollection.ElementAt(i);
+
+      AddListCollection(hwndListView, pcol);
+   }
+}
+
+void PinTableWnd::ImportFont(HWND hwndListView, const string &filename)
+{
+#ifndef __STANDALONE__
+   PinFont *const ppb = new PinFont();
+
+   ppb->ReadFromFile(filename);
+
+   if (!ppb->m_buffer.empty())
+   {
+      m_table->AddFont(ppb);
+      const int index = AddListBinary(hwndListView, ppb);
+      ListView_SetItemState(hwndListView, index, LVIS_SELECTED, LVIS_SELECTED);
+      ppb->Register();
+   }
+   else
+      delete ppb;
+#endif
+}
+
+void PinTableWnd::ListFonts(HWND hwndListView)
+{
+   for (PinFont *font : m_table->GetFontList())
+      AddListBinary(hwndListView, font);
+}
+
+int PinTableWnd::AddListBinary(HWND hwndListView, PinBinary *ppb)
+{
+#ifndef __STANDALONE__
+   LVITEM lvitem;
+   lvitem.mask = LVIF_DI_SETITEM | LVIF_TEXT | LVIF_PARAM;
+   lvitem.iItem = 0;
+   lvitem.iSubItem = 0;
+   lvitem.pszText = (LPSTR)ppb->m_name.c_str();
+   lvitem.lParam = (size_t)ppb;
+
+   const int index = ListView_InsertItem(hwndListView, &lvitem);
+
+   ListView_SetItemText_Safe(hwndListView, index, 1, ppb->m_path.string().c_str());
+
+   return index;
+#else
+   return 0;
 #endif
 }
 

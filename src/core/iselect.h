@@ -50,16 +50,7 @@ public:
    // Report a change that would need the Win32 UI to be redrawn
    virtual void SetDirtyDraw();
 
-   // Win32 editor rendering and picking
-   virtual void SetSelectFormat(Sur *psur);
-   virtual void SetMultiSelectFormat(Sur *psur);
-   virtual void SetLockedFormat(Sur *psur);
-   // This function draws the shape of the object with a solid fill, called before the grid lines are drawn on the map
-   virtual void UIRenderPass1(Sur *const psur) = 0;
-   // This function draws the shape of the object with a black outline (no solid fill), called after the grid lines have been drawn on the map.
-   virtual void UIRenderPass2(Sur *const psur) = 0;
-   virtual void RenderBlueprint(Sur *psur, const bool solid);
-
+   // Win32 editor picking
    virtual void OnLButtonDown(int x, int y);
    virtual void OnLButtonUp(int x, int y);
 
