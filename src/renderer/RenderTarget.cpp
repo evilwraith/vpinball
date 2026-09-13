@@ -144,6 +144,7 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
    case colorFormat::RGB16F: m_colorFormat = bgfx::TextureFormat::RG11B10F; break;
 #else
    case colorFormat::RGB16F: m_colorFormat = bgfx::TextureFormat::RGBA16F; break;
+#endif
    case colorFormat::R11G11B10F: m_colorFormat = bgfx::TextureFormat::RG11B10F; break;
    case colorFormat::RGBA16F: m_colorFormat = bgfx::TextureFormat::RGBA16F; break;
    case colorFormat::RGB32F: m_colorFormat = bgfx::TextureFormat::RGBA32F; break;
