@@ -431,7 +431,17 @@ void LiveUI::RenderUI()
    }
 
    // Update meshes and renders
-   const Matrix3D matRotate = Matrix3D::MatrixRotateZ(static_cast<float>(m_rotate * (M_PI / 2.0)));
+   // Quarter turns must be exact: cosf(pi/2) is -4.4e-8, not 0. On backends flagged low precision the
+   // uniform clamp in ShaderState (FLT_MIN_VALUE) pushes any such residue to +-6.1e-5, which is comparable
+   // to the ortho terms themselves (~1e-3) and sheared the whole UI by ~60px on a rotated 1080x1920
+   // display once the flag started tracking the backend actually created (OpenGL ES) rather than the one
+   // requested. Building the rotation from exact constants leaves the zero terms exactly zero.
+   static constexpr float quarterTurnCos[4] = { 1.f, 0.f, -1.f, 0.f };
+   static constexpr float quarterTurnSin[4] = { 0.f, 1.f, 0.f, -1.f };
+   Matrix3D matRotate = Matrix3D::MatrixIdentity();
+   matRotate._11 = matRotate._22 = quarterTurnCos[m_rotate & 3];
+   matRotate._12 = quarterTurnSin[m_rotate & 3];
+   matRotate._21 = -matRotate._12;
    Matrix3D matTranslate;
    switch (m_rotate)
    {
