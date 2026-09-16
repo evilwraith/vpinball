@@ -317,14 +317,6 @@ public:
 
    void SetMouseCapture();
 
-   // ISelect
-   bool IsUILocked() const final { return false; }
-   void SetUILock(bool lock) final { }
-   bool IsUIVisible() const final { return true; }
-   void SetUIVisible(bool visible) final { }
-
-   void OnLButtonDown(int x, int y) final;
-   void OnLButtonUp(int x, int y) final { }
    void SetDirtyDraw() final;
 
    bool GetDecalsEnabled()  const { return m_renderDecals; }  // Enable backdrop image, decals and lights on backdrop
@@ -333,7 +325,6 @@ public:
    void Copy(int x, int y);
    void Paste(const bool atLocation, const int x, const int y);
 
-   void ExportTableMesh();
    void ImportBackdropPOV(const std::filesystem::path &filename);
    void ExportBackdropPOV() const;
 
@@ -347,7 +338,6 @@ public:
    void ReImportSound(VPX::Sound *const pps, const std::filesystem::path &filename);
    bool ExportSound(VPX::Sound *const pps, const std::filesystem::path &filename);
    void RemoveSound(VPX::Sound *const pps);
-   static bool ExportImage(const Texture *const ppi, const string &filename);
    Texture* ImportImage(const std::filesystem::path &filename, const string &imageName);
    void RemoveImage(Texture *const ppi);
 
@@ -369,9 +359,6 @@ public:
    void RemoveFont(PinFont *const ppf);
    const vector<PinFont *> &GetFontList() const { return m_vfont; }
 
-#ifndef __STANDALONE__
-   void DoCommand(int icmd, int x, int y) final;
-#endif
    bool FMutilSelLocked();
 
    // Expected by CodeViewer
@@ -421,6 +408,7 @@ public:
    const IEditable *GetIEditable() const final { return (const IEditable *)this; }
 
    // FIXME both ISelect and IEditable
+   static inline constexpr ItemTypeEnum ItemType = eItemTable;
    ItemTypeEnum GetItemType() const final { return eItemTable; }
    PinTable *GetPTable() final { return this; }
    const PinTable *GetPTable() const final { return this; }
@@ -431,22 +419,8 @@ public:
    IEditable *GetElementByName(const char *const name) const;
    void OnDelete();
 
-   void UseTool(int x, int y, int tool);
-
-   void AssignSelectionToPartGroup(PartGroup *group);
-
-   // Transform editor window coordinates to table coordinates
-   Vertex2D TransformPoint(int x, int y) const;
-
-   void ClearMultiSel(ISelect *newSel = nullptr);
-   bool MultiSelIsEmpty() const;
-   ISelect *GetSelectedItem() const { return m_vmultisel.ElementAt(0); }
-   void AddMultiSel(ISelect *psel, const bool add, const bool update, const bool contextClick);
-
-   HRESULT Save();
-   HRESULT SaveToStorage(IStorage *pstg);
+   HRESULT Save(VPXFileFeedback &feedback);
    HRESULT SaveToStorage(IStorage *pstg, VPXFileFeedback& feedback);
-   HRESULT LoadGameFromFilename(const std::filesystem::path &filename);
    HRESULT LoadGameFromFilename(const std::filesystem::path &filename, VPXFileFeedback &feedback);
    void LoadScriptOverride(const std::filesystem::path& scriptPath);
 
@@ -530,8 +504,6 @@ public:
    CONNECTION_POINT_ENTRY(DIID_ITableEvents)
    END_CONNECTION_POINT_MAP()
 
-   void ListMaterials(HWND hwndListView);
-   int AddListMaterial(HWND hwndListView, Material *const pmat);
    void RemoveMaterial(Material *const pmat);
    void AddMaterial(Material *const pmat);
 
@@ -611,8 +583,6 @@ private:
    ankerl::unordered_dense::map<void *, void *> m_liveToStartup;
 
 public:
-   VectorProtected<ISelect> m_vmultisel;
-
    float m_left = 0.f; // always zero for now
    float m_top = 0.f; // always zero for now
    float m_right = 0.f;
@@ -805,7 +775,6 @@ public:
    float GetPlayfieldOverridenSlope() const;
 
    const wstring& GetCollectionNameByElement(const ISelect *const element) const;
-   void RefreshProperties();
 
    void SetNotesText(const string &text)
    {

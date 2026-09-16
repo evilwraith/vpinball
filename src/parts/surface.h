@@ -65,7 +65,6 @@ public:
 
    Surface()
    {
-      m_menuid = IDR_SURFACEMENU;
       m_d.m_collidable = true;
       m_d.m_slingshotAnimation = true;
       m_d.m_isBottomSolid = false;
@@ -111,13 +110,9 @@ public:
    Vertex2D GetCenter() const final { return GetPointCenter(); }
    void PutCenter(const Vertex2D& pv) final { PutPointCenter(pv); }
 
-#ifndef __STANDALONE__
-   void DoCommand(int icmd, int x, int y) final;
-#endif
    // end ISelect
 
    float GetDepth(const Vertex3Ds& viewDir) const final { return viewDir.z * m_d.m_heighttop; }
-   ItemTypeEnum HitableGetItemType() const final { return eItemSurface; }
 
 protected:
    void RenderSlingshots();
@@ -128,10 +123,11 @@ protected:
 public:
    void SetDefaultPhysics(const bool fromMouseClick) final;
    void ExportMesh(ObjLoader& loader) final;
-   void AddPoint(int x, int y, const bool smooth) final;
    void UpdateStatusBarInfo() final;
 
-   float    GetSlingshotStrength() const { return m_d.m_slingshotforce * (float)(1.0/10.0); }
+   void AddPoint(const Vertex2D &v, const bool smooth);
+
+   float GetSlingshotStrength() const { return m_d.m_slingshotforce * (float)(1.0 / 10.0); }
    void     SetSlingshotStrength(const float value)
    {
        m_d.m_slingshotforce = value * 10.0f;

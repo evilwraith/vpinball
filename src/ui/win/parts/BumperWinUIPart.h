@@ -13,8 +13,8 @@ public:
    void UIRenderPass1(Sur* psur) override;
    void UIRenderPass2(Sur* psur) override;
    void RenderBlueprint(Sur* psur, bool solid) override;
+   void UpdateStatusBarObjectPos() override;
 
 private:
-   PinTableWnd* const m_editor;
    Bumper* const m_bumper;
 };

@@ -4,6 +4,7 @@
 
 #include "ui/win/WinUIPartRegistry.h"
 
+#ifndef __STANDALONE__
 #include "ui/win/parts/BallWinUIPart.h"
 #include "parts/ball.h"
 #include "ui/win/parts/BumperWinUIPart.h"
@@ -12,6 +13,8 @@
 #include "parts/decal.h"
 #include "ui/win/parts/DispReelWinUIPart.h"
 #include "parts/dispreel.h"
+#include "ui/win/parts/DragPointWinUIPart.h"
+#include "parts/dragpoint.h"
 #include "ui/win/parts/FlasherWinUIPart.h"
 #include "parts/flasher.h"
 #include "ui/win/parts/FlipperWinUIPart.h"
@@ -46,27 +49,48 @@
 #include "parts/timer.h"
 #include "ui/win/parts/TriggerWinUIPart.h"
 #include "parts/trigger.h"
+#endif
 
 ankerl::unordered_dense::map<ItemTypeEnum, WinUIPartRegistry::CreateFunc> WinUIPartRegistry::m_map;
 
-std::unique_ptr<IWinUIPart> WinUIPartRegistry::Create(PinTableWnd* editor, IEditable* editable)
+#ifndef __STANDALONE__
+namespace
 {
-   if (!editable)
+// Fallback UI part for ISelect types that do not have a dedicated WinUI part (e.g. light centers).
+// It only provides the shared context menu commands of the base implementation.
+class GenericWinUIPart final : public IWinUIPart
+{
+public:
+   GenericWinUIPart(PinTableWnd* editor, ISelect* select)
+      : IWinUIPart(editor, select)
+   {
+   }
+   void UIRenderPass1(Sur* psur) override { }
+   void UIRenderPass2(Sur* psur) override { }
+};
+}
+#endif
+
+std::unique_ptr<IWinUIPart> WinUIPartRegistry::Create(PinTableWnd* editor, ISelect* select)
+{
+   if (!select)
       return nullptr;
 
-   auto it = m_map.find(editable->GetItemType());
+   auto it = m_map.find(select->GetItemType());
    if (it != m_map.end())
-      return it->second(editor, editable);
+      return it->second(editor, select);
 
    return nullptr;
 }
 
 void WinUIPartRegistry::InitRegistry()
 {
+#ifndef __STANDALONE__
    Register<BallWinUIPart, Ball>();
    Register<BumperWinUIPart, Bumper>();
    Register<DecalWinUIPart, Decal>();
    Register<DispReelWinUIPart, DispReel>();
+   Register<DragPointWinUIPart, DragPoint>();
    Register<FlasherWinUIPart, Flasher>();
    Register<FlipperWinUIPart, Flipper>();
    Register<GateWinUIPart, Gate>();
@@ -84,4 +108,7 @@ void WinUIPartRegistry::InitRegistry()
    Register<TextboxWinUIPart, Textbox>();
    Register<TimerWinUIPart, Timer>();
    Register<TriggerWinUIPart, Trigger>();
+
+   m_map[eItemLightCenter] = [](PinTableWnd* editor, ISelect* part) -> std::unique_ptr<IWinUIPart> { return std::make_unique<GenericWinUIPart>(editor, part); };
+#endif
 }

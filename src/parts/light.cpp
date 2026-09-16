@@ -12,8 +12,6 @@
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
 #include "renderer/VertexBuffer.h"
-#include "ui/win/DragPointDialogs.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/bulb.h"
 #include "utils/color.h"
@@ -743,11 +741,6 @@ void Light::Render(const unsigned int renderMask)
    }
 }
 
-void Light::SetObjectPos()
-{
-    m_vpinball->SetObjectPosCur(m_d.m_vCenter.x, m_d.m_vCenter.y);
-}
-
 void Light::MoveOffset(const float dx, const float dy)
 {
    m_d.m_vCenter.x += dx;
@@ -898,21 +891,9 @@ void Light::PutPointCenter(const Vertex2D& pv)
    m_d.m_vCenter = pv;
 }
 
-#ifndef __STANDALONE__
-void Light::EditMenu(CMenu &menu)
-{
-    menu.EnableMenuItem(ID_WALLMENU_FLIP, MF_BYCOMMAND | ((m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
-    menu.EnableMenuItem(ID_WALLMENU_MIRROR, MF_BYCOMMAND | ((m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
-    menu.EnableMenuItem(ID_WALLMENU_ROTATE, MF_BYCOMMAND | ((m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
-    menu.EnableMenuItem(ID_WALLMENU_SCALE, MF_BYCOMMAND | ((m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
-    menu.EnableMenuItem(ID_WALLMENU_ADDPOINT, MF_BYCOMMAND | ((m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
-}
-#endif
-
-void Light::AddPoint(int x, int y, const bool smooth)
+void Light::AddPoint(const Vertex2D &v, const bool smooth)
 {
    STARTUNDO
-   const Vertex2D v = m_ptable->TransformPoint(x, y);
 
    vector<RenderVertex> vvertex;
    GetRgVertex(vvertex);
@@ -941,40 +922,6 @@ void Light::AddPoint(int x, int y, const bool smooth)
 
    STOPUNDO
 }
-
-#ifndef __STANDALONE__
-void Light::DoCommand(int icmd, int x, int y)
-{
-   ISelect::DoCommand(icmd, x, y);
-
-   switch (icmd)
-   {
-   case ID_WALLMENU_FLIP:
-      FlipPointY(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_MIRROR:
-      FlipPointX(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_ROTATE:
-      VPX::WinUI::RotatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_SCALE:
-      VPX::WinUI::ScalePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_TRANSLATE:
-      VPX::WinUI::TranslatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_ADDPOINT:
-      AddPoint(x, y, true);
-      break;
-   }
-}
-#endif
 
 STDMETHODIMP Light::InterfaceSupportsErrorInfo(REFIID riid)
 {

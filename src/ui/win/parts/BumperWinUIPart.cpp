@@ -10,9 +10,14 @@
 
 
 BumperWinUIPart::BumperWinUIPart(PinTableWnd* editor, Bumper* bumper)
-   : m_editor(editor)
+   : IWinUIPart(editor, bumper)
    , m_bumper(bumper)
 {
+}
+
+void BumperWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_bumper->m_d.m_vCenter.x, m_bumper->m_d.m_vCenter.y);
 }
 
 void BumperWinUIPart::UIRenderPass1(Sur* const psur)

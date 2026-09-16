@@ -13,10 +13,10 @@ public:
    void UIRenderPass1(Sur* psur) override;
    void UIRenderPass2(Sur* psur) override;
    void RenderBlueprint(Sur* psur, bool solid) override;
+   void UpdateStatusBarObjectPos() override;
 
 private:
    void RenderOutline(Sur* psur);
 
-   PinTableWnd* const m_editor;
    LightSeq* const m_lightseq;
 };

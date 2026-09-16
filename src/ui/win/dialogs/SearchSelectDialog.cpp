@@ -172,7 +172,7 @@ void SearchSelectDialog::SelectElement()
 {
     const int count = ListView_GetSelectedCount(m_hElementList);
 
-    m_curTable->m_table->ClearMultiSel();
+    m_curTable->ClearMultiSel();
     int iItem = -1;
     for (int i = 0; i < count; i++)
     {
@@ -187,11 +187,10 @@ void SearchSelectDialog::SelectElement()
            if (szType == "Collection"sv)
            {
               CComObject<Collection> *const pcol = (CComObject<Collection>*)lv.lParam;
-              if (!pcol->m_visel.empty())
+              if (!pcol->GetParts().empty())
               {
-                 ISelect *const pisel = pcol->m_visel.ElementAt(0);
-                 if (pisel)
-                    m_curTable->m_table->AddMultiSel(pisel, false, true, false);
+                 if (ISelect *const pisel = pcol->GetParts()[0]->GetISelect(); pisel)
+                    m_curTable->AddMultiSel(pisel, false, true, false);
               }
            }
            else
@@ -202,7 +201,7 @@ void SearchSelectDialog::SelectElement()
                  if (pscript == pedit->GetIScriptable())
                  {
                     if (ISelect *const pisel = pedit->GetISelect(); pisel)
-                       m_curTable->m_table->AddMultiSel(pisel, true, true, false);
+                       m_curTable->AddMultiSel(pisel, true, true, false);
                     break;
                  }
               }

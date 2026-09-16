@@ -9,9 +9,14 @@
 
 
 BallWinUIPart::BallWinUIPart(PinTableWnd* editor, Ball* ball)
-   : m_editor(editor)
+   : IWinUIPart(editor, ball)
    , m_ball(ball)
 {
+}
+
+void BallWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_ball->m_hitBall.m_d.m_pos.x, m_ball->m_hitBall.m_d.m_pos.y);
 }
 
 void BallWinUIPart::UIRenderPass1(Sur* const psur)

@@ -3,13 +3,15 @@
 #include "core/stdafx.h"
 
 #include "parts/surface.h"
+#include "ui/win/DragPointDialogs.h"
 #include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "ui/win/parts/SurfaceWinUIPart.h"
 
 SurfaceWinUIPart::SurfaceWinUIPart(PinTableWnd* editor, Surface* surface)
-   : m_editor(editor)
+   : IWinUIPart(editor, surface)
    , m_surface(surface)
+   , m_pointParts(editor, surface)
 {
 }
 
@@ -44,7 +46,7 @@ void SurfaceWinUIPart::UIRenderPass2(Sur* const psur)
    }
 
    // if the item is selected then draw the dragpoints (or if we are always to draw dragpoints)
-   bool drawDragpoints = ((m_surface->m_selectstate != ISelect::SelectState::NotSelected) || m_editor->m_vpxEditor->m_alwaysDrawDragPoints);
+   bool drawDragpoints = ((m_selectstate != SelectState::NotSelected) || m_editor->m_vpxEditor->m_alwaysDrawDragPoints);
 
    if (!drawDragpoints)
    {
@@ -52,7 +54,7 @@ void SurfaceWinUIPart::UIRenderPass2(Sur* const psur)
       for (size_t i = 0; i < m_surface->m_vdpoint.size(); i++)
       {
          const CComObject<DragPoint>* const pdp = m_surface->m_vdpoint[i];
-         if (pdp->m_selectstate != ISelect::SelectState::NotSelected)
+         if (m_pointParts.IsSelected(pdp))
          {
             drawDragpoints = true;
             break;
@@ -66,7 +68,7 @@ void SurfaceWinUIPart::UIRenderPass2(Sur* const psur)
       if (!(drawDragpoints || pdp->m_slingshot))
          continue;
       psur->SetFillColor(-1);
-      psur->SetBorderColor(pdp->m_dragging ? RGB(0, 255, 0) : RGB(255, 0, 0), false, 0);
+      psur->SetBorderColor(m_pointParts.IsDragging(pdp) ? RGB(0, 255, 0) : RGB(255, 0, 0), false, 0);
 
       if (drawDragpoints)
       {
@@ -100,4 +102,24 @@ void SurfaceWinUIPart::RenderBlueprint(Sur* psur, const bool solid)
    m_surface->GetRgVertex(vvertex);
 
    psur->Polygon(vvertex);
+}
+
+void SurfaceWinUIPart::DoCommand(int icmd, int x, int y)
+{
+   IWinUIPart::DoCommand(icmd, x, y);
+
+   switch (icmd)
+   {
+   case ID_WALLMENU_FLIP: m_surface->FlipPointY(m_surface->GetPointCenter()); break;
+
+   case ID_WALLMENU_MIRROR: m_surface->FlipPointX(m_surface->GetPointCenter()); break;
+
+   case ID_WALLMENU_ROTATE: (void)VPX::WinUI::RotatePointsDialog(m_surface); break;
+
+   case ID_WALLMENU_SCALE: (void)VPX::WinUI::ScalePointsDialog(m_surface); break;
+
+   case ID_WALLMENU_TRANSLATE: (void)VPX::WinUI::TranslatePointsDialog(m_surface); break;
+
+   case ID_WALLMENU_ADDPOINT: m_surface->AddPoint(m_editor->TransformPoint(x, y), false); break;
+   }
 }

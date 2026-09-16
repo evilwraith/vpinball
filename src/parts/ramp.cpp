@@ -10,8 +10,6 @@
 #include "renderer/Shader.h"
 #include "renderer/Texture.h"
 #include "renderer/trace.h"
-#include "ui/win/DragPointDialogs.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/objloader.h"
 
@@ -185,7 +183,7 @@ void Ramp::GetBoundingVertices(vector<Vertex3Ds> &bounds, vector<Vertex3Ds> *con
    }
 }
 
-void Ramp::AssignHeightToControlPoint(const RenderVertex3D &v, const float height)
+void Ramp::AssignHeightToControlPoint(const RenderVertex3D &v, const float height) const
 {
    for (size_t i = 0; i < m_vdpoint.size(); i++)
    {
@@ -207,7 +205,8 @@ void Ramp::AssignHeightToControlPoint(const RenderVertex3D &v, const float heigh
  *  ppfCross     - size cvertex, true if i-th vertex corresponds to a control point
  *  ppratio      - how far along the ramp length the i-th vertex is, 1=start=bottom, 0=end=top (??)
  */
-Vertex2D *Ramp::GetRampVertex(int &pcvertex, float ** const ppheight, bool ** const ppfCross, float ** const ppratio, Vertex2D ** const pMiddlePoints, const float _accuracy, const bool inc_width)
+Vertex2D *Ramp::GetRampVertex(
+   int &pcvertex, float **const ppheight, bool **const ppfCross, float **const ppratio, Vertex2D **const pMiddlePoints, const float _accuracy, const bool inc_width) const
 {
    vector<RenderVertex3D> vvertex;
    GetCentralCurve(vvertex, _accuracy);
@@ -1188,11 +1187,6 @@ void Ramp::PrepareHabitrail()
 #pragma endregion
 
 
-void Ramp::SetObjectPos()
-{
-   m_vpinball->SetObjectPosCur(0, 0);
-}
-
 void Ramp::MoveOffset(const float dx, const float dy)
 {
    for (size_t i = 0; i < m_vdpoint.size(); i++)
@@ -1293,10 +1287,9 @@ void Ramp::Load(IObjectReader& reader)
       });
 }
 
-void Ramp::AddPoint(int x, int y, const bool smooth)
+void Ramp::AddPoint(const Vertex2D &v, const bool smooth)
 {
    STARTUNDO
-   const Vertex2D v = m_ptable->TransformPoint(x, y);
 
    vector<RenderVertex3D> vvertex;
    GetCentralCurve(vvertex);
@@ -1325,42 +1318,6 @@ void Ramp::AddPoint(int x, int y, const bool smooth)
 
    STOPUNDO
 }
-
-#ifndef __STANDALONE__
-void Ramp::DoCommand(int icmd, int x, int y)
-{
-   ISelect::DoCommand(icmd, x, y);
-
-   switch (icmd)
-   {
-   case ID_WALLMENU_FLIP:
-      FlipPointY(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_MIRROR:
-      FlipPointX(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_ROTATE:
-      VPX::WinUI::RotatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_SCALE:
-      VPX::WinUI::ScalePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_TRANSLATE:
-      VPX::WinUI::TranslatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_ADDPOINT:
-   {
-      AddPoint(x, y, true);
-   }
-   break;
-   }
-}
-#endif
 
 void Ramp::FlipY(const Vertex2D& pvCenter)
 {

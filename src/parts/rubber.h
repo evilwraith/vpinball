@@ -47,7 +47,6 @@ class Rubber :
    public IPerPropertyBrowsing // Ability to fill in dropdown in property browser
 {
 public:
-   friend class RubberWinUIPart;
 #ifdef __STANDALONE__
    STDMETHOD(GetIDsOfNames)(REFIID /*riid*/, LPOLESTR* rgszNames, UINT cNames, LCID lcid,DISPID* rgDispId);
    STDMETHOD(Invoke)(DISPID dispIdMember, REFIID /*riid*/, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr);
@@ -56,7 +55,6 @@ public:
 #endif
    Rubber()
    {
-      m_menuid = IDR_SURFACEMENU;
       m_d.m_collidable = true;
       m_d.m_visible = true;
       m_timerEnabled = false;
@@ -91,11 +89,6 @@ public:
    void ClearForOverwrite() final;
 
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
-
-#ifndef __STANDALONE__
-   void DoCommand(int icmd, int x, int y) final;
-#endif
 
    int GetMinimumPoints() const final { return 2; }
 
@@ -104,26 +97,33 @@ public:
    void Rotate(const float ang, const Vertex2D& pvCenter, const bool useElementCenter) final;
    void Scale(const float scalex, const float scaley, const Vertex2D& pvCenter, const bool useElementCenter) final;
    void Translate(const Vertex2D &pvOffset) final;
-   void AddPoint(int x, int y, const bool smooth) final;
-
    Vertex2D GetCenter() const final { return GetPointCenter(); }
    void PutCenter(const Vertex2D& pv) final { PutPointCenter(pv); }
 
    void GetBoundingVertices(vector<Vertex3Ds> &bounds, vector<Vertex3Ds> *const legacy_bounds) final;
 
    float GetDepth(const Vertex3Ds& viewDir) const final;
-   ItemTypeEnum HitableGetItemType() const final { return eItemRubber; }
    void SetDefaultPhysics(const bool fromMouseClick) final;
    void ExportMesh(ObjLoader& loader) final;
 
    void WriteRegDefaults() final;
    void UpdateStatusBarInfo() final;
 
+   void AddPoint(const Vertex2D &v, const bool smooth);
+
 #if 0
    float GetSurfaceHeight(float x, float y) const final;
 #endif
 
    RubberData m_d;
+
+   // Fills 'outline' with the closed 2D outline of the rubber for editor display, and optionally
+   // 'crossFlags' with one flag per curve vertex marking the ones located at a control point.
+   void GetEditorOutline(vector<Vertex2D> &outline, vector<bool> *crossFlags, const float accuracy) const;
+
+   // Fills 'edges' with pairs of 2D vertices forming the wireframe of the generated mesh for editor display.
+   // This actually regenerate the mesh
+   void GetEditorWireframe(vector<Vertex2D> &edges);
 
 private:
    void AddHitEdge(class PhysicsEngine *physics, ankerl::unordered_dense::set<std::pair<unsigned, unsigned>> &addedEdges, const unsigned i, const unsigned j, const bool isUI);
@@ -153,7 +153,6 @@ private:
 
    void UpdateRubber(const bool updateVB, const float height);
    void GenerateMesh(const int _accuracy = -1, const bool createHitShape = false);
-   void DrawRubberMesh(Sur * const psur);
 
    // IRubber
 public:

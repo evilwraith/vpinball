@@ -25,6 +25,7 @@ public:
       SDL_JoystickID* const joystickIds = SDL_GetJoysticks(&joystickCount);
       for (int i = 0; i < joystickCount; i++)
          OnJoystickAdded(joystickIds[i]);
+      SDL_free(joystickIds);
 
       #ifdef __ANDROID__
          OpenDeviceVibrator();
@@ -44,12 +45,12 @@ public:
       SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD);
    }
 
-   void PlayRumble(const float lowFrequencySpeed, const float highFrequencySpeed, const int ms_duration) override
+   void PlayRumble(const float lowFrequencySpeed, const float highFrequencySpeed, const int ms_duration, const bool kickLow, const bool kickHigh) override
    {
       for (auto joy : m_joysticks)
       {
-         Uint16 lowFreq = (Uint16)(saturate(lowFrequencySpeed) * 65535.0f);
-         Uint16 highFreq = (Uint16)(saturate(highFrequencySpeed) * 65535.0f);
+         Uint16 lowFreq = (Uint16)(GamepadMotorLevel(lowFrequencySpeed, kickLow) * 65535.0f);
+         Uint16 highFreq = (Uint16)(GamepadMotorLevel(highFrequencySpeed, kickHigh) * 65535.0f);
          SDL_RumbleJoystick(joy, lowFreq, highFreq, ms_duration);
       }
 
@@ -215,12 +216,14 @@ private:
    {
       int joystickCount = 0;
       SDL_JoystickID* const joystickIds = SDL_GetJoysticks(&joystickCount);
-      for (int i = 0; i < joystickCount; i++)
+      bool present = false;
+      for (int i = 0; i < joystickCount && !present; i++)
       {
          if (SDL_GUID other = SDL_GetJoystickGUIDForID(joystickIds[i]); SDL_memcmp(&guid, &other, sizeof(SDL_GUID)) == 0)
-            return true;
+            present = true;
       }
-      return false;
+      SDL_free(joystickIds);
+      return present;
    }
 
    void OnJoystickAdded(SDL_JoystickID id)
@@ -258,6 +261,7 @@ private:
          if (string otherName = SDL_GetJoystickNameForID(joystickIds[i]); otherName == sdlJoyName)
             nameIndex++;
       }
+      SDL_free(joystickIds);
       char strGuid[33];
       SDL_GUIDToString(guid, strGuid, 33);
       const string settingId = "SDLJoy_"s + strGuid + '_' + std::to_string(idIndex);
@@ -595,6 +599,21 @@ private:
    SDL_Haptic* m_deviceVibrator = nullptr;
    SDL_HapticEffectID m_deviceVibratorEffect = -1;
 #endif
+
+   // Measured with an accelerometer on an Xbox pad: eccentric mass motors need well over 100 ms from rest to full
+   // amplitude, do not move below 0.3 and are full at about 0.86. So every level is mapped onto the usable range
+   // and a kick is driven at twice the mapped level (capped).
+   static constexpr float RUMBLE_MOTOR_FLOOR = 0.3f;
+   static constexpr float RUMBLE_KICK_GAIN = 2.f;
+
+   static float GamepadMotorLevel(const float speed, const bool kick)
+   {
+      const float level = saturate(speed);
+      if (level <= 0.f)
+         return 0.f;
+      const float motor = RUMBLE_MOTOR_FLOOR + (1.f - RUMBLE_MOTOR_FLOOR) * level;
+      return kick ? min(1.f, motor * RUMBLE_KICK_GAIN) : motor;
+   }
 
    InputManager& m_pininput;
    vector<SDL_Joystick*> m_joysticks;

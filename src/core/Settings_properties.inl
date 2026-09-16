@@ -1,8 +1,12 @@
 // Versions
 PropString(Version, VPinball, "VPX Version"s, "VPX version that saved this file"s, string(VP_VERSION_STRING_DIGITS));
 
+// Global settings
+PropBool(Global, EnableLog, "Enable Log"s, "Enable general logging to the vinball.log file"s, true);
+PropBool(Global, LogScriptOutput, "Log Script Output"s, "Enable script logging output"s, true);
+PropBool(Global, ResetLogOnPlay, "Reset Log on Play"s, "Reset the log file when a table is played"s, g_isMobile);
+
 // General Application settings
-PropBool(Editor, EnableLog, "Enable Log"s, "Enable general logging to the vinball.log file"s, true);
 PropBool(Editor, DisableHash, "Disable File Validation"s, "Disable file integrity validation (risky; but slightly faster loading)"s, false);
 
 // Audio settings
@@ -238,6 +242,12 @@ PropBool(Player, Mirror, "Mirror"s, "Mirror the table (left <-> right)"s, false)
 PropEnum(Player, CacheMode, "Cache Mode"s, "Use cache to limit stutters and speedup loading"s, int, 1, "Disabled"s, "Preload Textures"s);
 PropEnum(Player, RumbleMode, "RumbleMode"s, "Use rumble motor(s) in attached input devices"s, int, 3, "Off"s, "Table only (N/A yet)"s, "Generic only (N/A yet)"s, "Table with generic fallback"s);
 PropFloat(Player, RumbleFlipperContact, "Flipper Contact Rumble"s, "Strength of the rumble played when a ball hits a flipper, scaled by the impact speed (0 disables it)"s, 0.f, 3.f, 1.f);
+PropFloat(Player, RumbleBumper, "Bumper Rumble"s, "Strength of the rumble played when a bumper fires (0 disables it)"s, 0.f, 3.f, 1.f);
+PropFloat(Player, RumbleSlingshot, "Slingshot Rumble"s, "Strength of the rumble played when a slingshot fires (0 disables it)"s, 0.f, 3.f, 1.f);
+PropFloat(Player, RumblePlunger, "Plunger Rumble"s, "Strength of the rumble played when the plunger tip strikes the ball or the ball lands on the plunger, scaled by the impact (0 disables it)"s, 0.f, 3.f, 1.f);
+PropFloat(Player, RumbleFlipperButton, "Flipper Button Rumble"s, "Strength of the pulse played when a flipper fires on its button, whether or not it hits a ball (0 disables it). Ball hits on the flipper are the Flipper Contact Rumble."s, 0.f, 3.f, 0.5f);
+PropFloat(Player, RumbleNudge, "Nudge Rumble"s, "Strength of the rumble played when the cabinet is nudged, scaled by the cabinet acceleration (0 disables it)"s, 0.f, 3.f, 1.f);
+PropFloat(Player, RumbleBallBall, "Ball Collision Rumble"s, "Strength of the rumble played when two balls collide, scaled by the impact speed (0 disables it)"s, 0.f, 3.f, 1.f);
 PropInt(Player, MinPhysLoopTime, "MinPhysLoopTime"s, ""s, 0, 1000, 0); // Legacy lag reduction hack (e.g. if script execution or physics takes very long, comes at the price of "slower" gameplay). Not supported by BGFX variant (due to its multithreaded loop)
 PropIntUnbounded(Player, PhysicsMaxLoops, "Physics Max Loops"s,
    "Maximum number of physics iteration above which physics engine just skip to stay playable.\nThis is somewhat hacky, override table setup, and may cause gameplay issues. This should not be used anymore."s,
@@ -1511,7 +1521,6 @@ PropInt(Standalone, AncillaryFrameDivider, "Ancillary window frame divider"s,
    "Re-render the backglass, score view and topper windows on every Nth playfield frame, "
    "staggered so no two land on the same frame. The last rendered frame stays on screen between "
    "updates. 1 = every frame. RK3588 only."s, 1, 8, 2);
-PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 // 4kp/HDP only. Render the playfield below the panel's native resolution and let the display
 // controller (RK3588 VOP2) upscale it at scanout. That removes a full-resolution GPU pass and stops
 // the GPU writing a 4K surface every frame; the cost is a softer image, including the in-game menus.
@@ -1523,7 +1532,6 @@ PropFloatStepped(Standalone, BackBufferScale, "Playfield render scale"s,
    0.25f, 1.0f, 0.05f, 1.0f);
 PropBool(Standalone, ForceBackBufferScale, "Force playfield render scale"s,
    "Apply the render scale even on a non-4K playfield, where it would otherwise be ignored."s, false);
-PropBool(Standalone, ResetLogOnPlay, "Reset Log on Play"s, ""s, g_isMobile);
 
 // Editor settings
 PropIntUnbounded(Editor, WindowLeft, "WindowLeft"s, "Main window left"s, -1);
@@ -1573,7 +1581,6 @@ PropBool(Editor, AutoSaveOn, "AutoSaveOn"s, "Enable Autosave for table(s)"s, tru
 PropIntUnbounded(Editor, AutoSaveTime, "AutoSaveTime"s, "Time for the Autosave intervals"s, 10);
 PropIntUnbounded(Editor, GridSize, "GridSize"s, "Grid size in viewport/editor"s, 50);
 PropBool(Editor, GroupElementsInCollection, "GroupElementsInCollection"s, "Group Elements in a collection in viewport/editor"s, true);
-PropBool(Editor, LogScriptOutput, "LogScriptOutput"s, "Enable script logging output"s, true);
 PropInt(Editor, DefaultMaterialColor, "DefaultMaterialColor"s, "Default material color in viewport/editor"s, 0x000000, 0xFFFFFF, 0xB469FF);
 PropInt(Editor, ElementSelectColor, "ElementSelectColor"s, "Element selection color in viewport/editor"s, 0x000000, 0xFFFFFF, 0x00FF0000);
 PropInt(Editor, ElementSelectLockedColor, "ElementSelectLockedColor"s, "Locked Element selection color in viewport/editor"s, 0x000000, 0xFFFFFF, 0x00A7726D);

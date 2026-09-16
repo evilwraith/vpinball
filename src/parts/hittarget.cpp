@@ -19,7 +19,6 @@
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
 #include "renderer/VertexBuffer.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/objloader.h"
 
@@ -115,7 +114,7 @@ void HitTarget::SetMeshType(const TargetType type)
 
 HRESULT HitTarget::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   SetDefaults(false);
+   SetDefaults(fromMouseClick);
    m_d.m_vPosition.x = x;
    m_d.m_vPosition.y = y;
    UpdateStatusBarInfo();
@@ -441,6 +440,23 @@ void HitTarget::TransformVertices()
    }
 }
 
+void HitTarget::GetEditorWireframe(vector<Vertex2D> &edges) const
+{
+   edges.reserve(m_numIndices * 2);
+   for (unsigned i = 0; i < m_numIndices; i += 3)
+   {
+      const Vertex3Ds &A = m_hitUIVertices[m_indices[i]];
+      const Vertex3Ds &B = m_hitUIVertices[m_indices[i + 1]];
+      const Vertex3Ds &C = m_hitUIVertices[m_indices[i + 2]];
+      edges.emplace_back(A.x, A.y);
+      edges.emplace_back(B.x, B.y);
+      edges.emplace_back(B.x, B.y);
+      edges.emplace_back(C.x, C.y);
+      edges.emplace_back(C.x, C.y);
+      edges.emplace_back(A.x, A.y);
+   }
+}
+
 void HitTarget::ExportMesh(ObjLoader& loader)
 {
    const string name = MakeString(m_wzName);
@@ -680,11 +696,6 @@ void HitTarget::UpdateTarget()
 //////////////////////////////
 // Positioning
 //////////////////////////////
-
-void HitTarget::SetObjectPos()
-{
-    m_vpinball->SetObjectPosCur(m_d.m_vPosition.x, m_d.m_vPosition.y);
-}
 
 void HitTarget::MoveOffset(const float dx, const float dy)
 {

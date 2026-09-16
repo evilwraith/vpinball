@@ -8,9 +8,14 @@
 #include "ui/win/parts/SpinnerWinUIPart.h"
 
 SpinnerWinUIPart::SpinnerWinUIPart(PinTableWnd* editor, Spinner* spinner)
-   : m_editor(editor)
+   : IWinUIPart(editor, spinner)
    , m_spinner(spinner)
 {
+}
+
+void SpinnerWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_spinner->m_d.m_vCenter.x, m_spinner->m_d.m_vCenter.y);
 }
 
 void SpinnerWinUIPart::UIRenderPass1(Sur* const psur)

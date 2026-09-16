@@ -256,6 +256,14 @@ private:
 
 Logger* Logger::m_pInstance = nullptr;
 
+#if defined(__RK3588__)
+// Truncate() goes through the raw file sink: the AsyncLogAppender in front of it owns no file.
+// Its writer thread and truncate() serialize on the sink's own appender mutex.
+static plog::RollingFileAppender<PreformattedFormatter>* s_fileAppender = nullptr;
+#else
+static plog::RollingFileAppender<ThreadAwareTxtFormatter<false>>* s_fileAppender = nullptr;
+#endif
+
 Logger* Logger::GetInstance()
 {
    if (!m_pInstance)
@@ -283,10 +291,14 @@ void Logger::SetupLogger(const bool enable)
          // primary file must be big enough for a whole session on its own.
          static plog::RollingFileAppender<PreformattedFormatter> rawFileAppender(logPath.string().c_str(), 1024 * 1024 * 25, 2);
          static AsyncLogAppender fileAppender(&rawFileAppender, true);
+         s_fileAppender = &rawFileAppender;
 #elif PLOG_CHAR_IS_UTF8
          static plog::RollingFileAppender<ThreadAwareTxtFormatter<false>> fileAppender(logPath.string().c_str(), 1024 * 1024 * 5, 1);
 #else
          static plog::RollingFileAppender<ThreadAwareTxtFormatter<false>> fileAppender(logPath.wstring().c_str(), 1024 * 1024 * 5, 1);
+#endif
+#if !defined(__RK3588__)
+         s_fileAppender = &fileAppender;
 #endif
          static DebugAppender debugAppender;
          plog::Logger<PLOG_DEFAULT_INSTANCE_ID>::getInstance()->addAppender(&debugAppender);
@@ -332,7 +344,6 @@ void Logger::Init()
 
 void Logger::Truncate()
 {
-   std::filesystem::path szLogPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "vpinball.log");
-   std::ofstream ofs(szLogPath, std::ofstream::out | std::ofstream::trunc);
-   ofs.close();
+   if (s_fileAppender)
+      s_fileAppender->truncate();
 }

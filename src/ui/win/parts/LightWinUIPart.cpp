@@ -3,14 +3,33 @@
 #include "core/stdafx.h"
 
 #include "parts/light.h"
+#include "ui/win/DragPointDialogs.h"
 #include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
+#include "ui/win/WinUIPartRegistry.h"
 #include "ui/win/parts/LightWinUIPart.h"
 
 LightWinUIPart::LightWinUIPart(PinTableWnd* editor, Light* light)
-   : m_editor(editor)
+   : IWinUIPart(editor, light)
    , m_light(light)
+   , m_pointParts(editor, light)
 {
+}
+
+IWinUIPart* LightWinUIPart::GetSubPart(ISelect* select)
+{
+   if (select == m_light->GetLightCenterSelect())
+   {
+      if (!m_centerPart)
+         m_centerPart = WinUIPartRegistry::Create(m_editor, select);
+      return m_centerPart.get();
+   }
+   return m_pointParts.Get(select);
+}
+
+void LightWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_light->m_d.m_vCenter.x, m_light->m_d.m_vCenter.y);
 }
 
 void LightWinUIPart::UIRenderPass1(Sur* const psur)
@@ -35,7 +54,7 @@ void LightWinUIPart::UIRenderPass1(Sur* const psur)
 
 void LightWinUIPart::UIRenderPass2(Sur* const psur)
 {
-   bool drawDragpoints = ((m_light->m_selectstate != ISelect::SelectState::NotSelected) || (m_editor->m_vpxEditor->m_alwaysDrawDragPoints));
+   bool drawDragpoints = ((m_selectstate != SelectState::NotSelected) || (m_editor->m_vpxEditor->m_alwaysDrawDragPoints));
 
    // if the item is selected then draw the dragpoints (or if we are always to draw dragpoints)
    if (!drawDragpoints)
@@ -44,7 +63,7 @@ void LightWinUIPart::UIRenderPass2(Sur* const psur)
       for (size_t i = 0; i < m_light->m_vdpoint.size(); i++)
       {
          const CComObject<DragPoint>* const pdp = m_light->m_vdpoint[i];
-         if (pdp->m_selectstate != ISelect::SelectState::NotSelected)
+         if (m_pointParts.IsSelected(pdp))
          {
             drawDragpoints = true;
             break;
@@ -60,7 +79,7 @@ void LightWinUIPart::UIRenderPass2(Sur* const psur)
       {
          CComObject<DragPoint>* const pdp = m_light->m_vdpoint[i];
          psur->SetFillColor(-1);
-         psur->SetBorderColor(pdp->m_dragging ? RGB(0, 255, 0) : RGB(0, 0, 200), false, 0);
+         psur->SetBorderColor(m_pointParts.IsDragging(pdp) ? RGB(0, 255, 0) : RGB(0, 0, 200), false, 0);
          psur->SetObject(pdp);
 
          psur->Ellipse2(pdp->m_v.x, pdp->m_v.y, 8);
@@ -94,7 +113,7 @@ void LightWinUIPart::RenderOutline(Sur* const psur)
       psur->SetBorderColor(RGB(0, 0, 0), false, 0);
       psur->Polygon(vvertex);
 
-      psur->SetObject((ISelect*)&m_light->m_lightcenter);
+      psur->SetObject(m_light->GetLightCenterSelect());
       break;
    }
    }
@@ -115,4 +134,33 @@ void LightWinUIPart::RenderOutline(Sur* const psur)
 void LightWinUIPart::RenderBlueprint(Sur* psur, const bool solid)
 {
    RenderOutline(psur);
+}
+
+void LightWinUIPart::EditMenu(CMenu& menu)
+{
+   menu.EnableMenuItem(ID_WALLMENU_FLIP, MF_BYCOMMAND | ((m_light->m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
+   menu.EnableMenuItem(ID_WALLMENU_MIRROR, MF_BYCOMMAND | ((m_light->m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
+   menu.EnableMenuItem(ID_WALLMENU_ROTATE, MF_BYCOMMAND | ((m_light->m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
+   menu.EnableMenuItem(ID_WALLMENU_SCALE, MF_BYCOMMAND | ((m_light->m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
+   menu.EnableMenuItem(ID_WALLMENU_ADDPOINT, MF_BYCOMMAND | ((m_light->m_d.m_shape != ShapeCustom) ? MF_GRAYED : MF_ENABLED));
+}
+
+void LightWinUIPart::DoCommand(int icmd, int x, int y)
+{
+   IWinUIPart::DoCommand(icmd, x, y);
+
+   switch (icmd)
+   {
+   case ID_WALLMENU_FLIP: m_light->FlipPointY(m_light->GetPointCenter()); break;
+
+   case ID_WALLMENU_MIRROR: m_light->FlipPointX(m_light->GetPointCenter()); break;
+
+   case ID_WALLMENU_ROTATE: (void)VPX::WinUI::RotatePointsDialog(m_light); break;
+
+   case ID_WALLMENU_SCALE: (void)VPX::WinUI::ScalePointsDialog(m_light); break;
+
+   case ID_WALLMENU_TRANSLATE: (void)VPX::WinUI::TranslatePointsDialog(m_light); break;
+
+   case ID_WALLMENU_ADDPOINT: m_light->AddPoint(m_editor->TransformPoint(x, y), true); break;
+   }
 }

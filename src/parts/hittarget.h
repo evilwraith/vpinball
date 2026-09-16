@@ -61,7 +61,6 @@ class HitTarget :
    public IPerPropertyBrowsing // Ability to fill in dropdown in property browser
 {
 public:
-   friend class HitTargetWinUIPart;
 #ifdef __STANDALONE__
    STDMETHOD(GetIDsOfNames)(REFIID /*riid*/, LPOLESTR* rgszNames, UINT cNames, LCID lcid,DISPID* rgDispId);
    STDMETHOD(Invoke)(DISPID dispIdMember, REFIID /*riid*/, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr);
@@ -162,7 +161,6 @@ public:
 
 
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
    // Multi-object manipulation
    Vertex2D GetCenter() const final;
    void PutCenter(const Vertex2D& pv) final;
@@ -170,7 +168,9 @@ public:
    void WriteRegDefaults() final;
 
    float GetDepth(const Vertex3Ds& viewDir) const final;
-   ItemTypeEnum HitableGetItemType() const final { return eItemHitTarget; }
+
+   bool IsConstCollidable() const final { return false; }
+   bool IsCollidable() const final { return !m_d.m_isDropped; }
 
    void SetDefaultPhysics(const bool fromMouseClick) final;
    void ExportMesh(ObjLoader& loader) final;
@@ -183,6 +183,9 @@ public:
    HitTargetData m_d;
 
    bool m_hitEvent = false;
+
+   // Fills 'edges' with pairs of 2D vertices forming the editor wireframe of the target mesh.
+   void GetEditorWireframe(vector<Vertex2D> &edges) const;
 
 private:
    void UpdateTarget();

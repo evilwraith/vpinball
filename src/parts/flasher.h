@@ -85,7 +85,7 @@ public:
    STDMETHOD(GetDocumentation)(MEMBERID index, BSTR *pBstrName, BSTR *pBstrDocString, DWORD *pdwHelpContext, BSTR *pBstrHelpFile);
    HRESULT FireDispID(const DISPID dispid, DISPPARAMS * const pdispparams) final;
 #endif
-   Flasher() { m_menuid = IDR_SURFACEMENU; }
+   Flasher() { }
    virtual ~Flasher();
 
    STANDARD_EDITABLE_DECLARES(Flasher, eItemFlasher, FLASHER, VIEW_PLAYFIELD | VIEW_BACKGLASS)
@@ -119,18 +119,13 @@ public:
    void Scale(const float scalex, const float scaley, const Vertex2D &pvCenter, const bool useElementCenter) final;
    void Translate(const Vertex2D &pvOffset) final;
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
 
    int GetMinimumPoints() const final { return 2; }
 
    Vertex2D GetCenter() const final { return m_d.m_vCenter; }
    void PutCenter(const Vertex2D& pv) final { m_d.m_vCenter = pv; }
 
-#ifndef __STANDALONE__
-   void DoCommand(int icmd, int x, int y) final;
-#endif
-
-   void AddPoint(int x, int y, const bool smooth) final;
+   void AddPoint(const Vertex2D &v, const bool smooth);
 
 protected:
    Renderer *m_renderer = nullptr;
@@ -142,7 +137,6 @@ public:
    {
       return m_d.m_depthBias + viewDir.x * m_d.m_vCenter.x + viewDir.y * m_d.m_vCenter.y + viewDir.z * m_d.m_height;
    }
-   ItemTypeEnum HitableGetItemType() const final { return eItemFlasher; }
 
    void WriteRegDefaults() final;
 

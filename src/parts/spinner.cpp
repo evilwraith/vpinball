@@ -12,7 +12,6 @@
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
 #include "renderer/VertexBuffer.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/objloader.h"
 
@@ -407,11 +406,6 @@ void Spinner::UpdatePlate(Vertex3D_NoTex2 * const vertBuffer)
 
 #pragma endregion
 
-
-void Spinner::SetObjectPos()
-{
-   m_vpinball->SetObjectPosCur(m_d.m_vCenter.x, m_d.m_vCenter.y);
-}
 
 void Spinner::MoveOffset(const float dx, const float dy)
 {

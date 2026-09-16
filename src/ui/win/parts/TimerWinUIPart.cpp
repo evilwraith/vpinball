@@ -8,9 +8,14 @@
 #include "ui/win/parts/TimerWinUIPart.h"
 
 TimerWinUIPart::TimerWinUIPart(PinTableWnd* editor, Timer* timer)
-   : m_editor(editor)
+   : IWinUIPart(editor, timer)
    , m_timer(timer)
 {
+}
+
+void TimerWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_timer->m_d.m_v.x, m_timer->m_d.m_v.y);
 }
 
 void TimerWinUIPart::UIRenderPass1(Sur* const psur)

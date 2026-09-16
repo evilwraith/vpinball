@@ -83,7 +83,6 @@ public:
    STDMETHOD(InterfaceSupportsErrorInfo)(REFIID riid);
 
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
    // Multi-object manipulation
    Vertex2D GetCenter() const final;
    void PutCenter(const Vertex2D &pv) final;
@@ -91,7 +90,6 @@ public:
 
    void ExportMesh(ObjLoader &loader) final;
 
-   ItemTypeEnum HitableGetItemType() const final { return eItemGate; }
    void UpdateStatusBarInfo() final;
 
    void WriteRegDefaults() final;

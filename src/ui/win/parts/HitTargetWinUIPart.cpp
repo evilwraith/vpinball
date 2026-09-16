@@ -8,9 +8,14 @@
 #include "ui/win/parts/HitTargetWinUIPart.h"
 
 HitTargetWinUIPart::HitTargetWinUIPart(PinTableWnd* editor, HitTarget* hittarget)
-   : m_editor(editor)
+   : IWinUIPart(editor, hittarget)
    , m_hittarget(hittarget)
 {
+}
+
+void HitTargetWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_hittarget->m_d.m_vPosition.x, m_hittarget->m_d.m_vPosition.y);
 }
 
 void HitTargetWinUIPart::UIRenderPass1(Sur* const psur)
@@ -22,17 +27,12 @@ void HitTargetWinUIPart::UIRenderPass2(Sur* const psur)
    psur->SetLineColor(RGB(0, 0, 0), false, 1);
    psur->SetObject(m_hittarget);
 
-   for (unsigned i = 0; i < m_hittarget->m_numIndices; i += 3)
-   {
-      const Vertex3Ds* const A = &m_hittarget->m_hitUIVertices[m_hittarget->m_indices[i]];
-      const Vertex3Ds* const B = &m_hittarget->m_hitUIVertices[m_hittarget->m_indices[i + 1]];
-      const Vertex3Ds* const C = &m_hittarget->m_hitUIVertices[m_hittarget->m_indices[i + 2]];
-      psur->Line(A->x, A->y, B->x, B->y);
-      psur->Line(B->x, B->y, C->x, C->y);
-      psur->Line(C->x, C->y, A->x, A->y);
-   }
+   vector<Vertex2D> edges;
+   m_hittarget->GetEditorWireframe(edges);
+   if (!edges.empty())
+      psur->Lines(edges.data(), (int)(edges.size() / 2));
 
-   if (m_hittarget->m_selectstate == ISelect::SelectState::NotSelected)
+   if (m_selectstate == SelectState::NotSelected)
       return;
 
    const float radangle = ANGTORAD(m_hittarget->m_d.m_rotZ - 180.0f);

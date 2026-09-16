@@ -87,7 +87,6 @@ class Primitive :
    public IPerPropertyBrowsing // Ability to fill in dropdown in property browser
 {
 public:
-   friend class PrimitiveWinUIPart;
 #ifdef __STANDALONE__
    STDMETHOD(GetIDsOfNames)(REFIID /*riid*/, LPOLESTR* rgszNames, UINT cNames, LCID lcid,DISPID* rgDispId);
    STDMETHOD(Invoke)(DISPID dispIdMember, REFIID /*riid*/, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr);
@@ -258,15 +257,14 @@ public:
    bool PhysicUpdate(class PhysicsEngine *physics, const bool isUI) final;
 
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
    // Multi-object manipulation
    Vertex2D GetCenter() const final;
    void PutCenter(const Vertex2D &pv) final;
 
    void WriteRegDefaults() final;
 
-   bool LoadMeshDialog() final;
-   void ExportMeshDialog() final;
+   bool LoadMesh(
+      const string &filename, const MeshUnits units, const bool importAbsolutePosition, const bool centerMesh, const bool importMaterial, const bool importAnimation, const bool doForsyth);
 
 #if (GET_PLATFORM_OS_ENUM==0) // Windows
    bool IsPlayfield() const { return _wcsicmp(m_wzName.c_str(), L"playfield_mesh") == 0; }
@@ -281,7 +279,9 @@ public:
 
 public:
    float GetDepth(const Vertex3Ds &viewDir) const final;
-   ItemTypeEnum HitableGetItemType() const final { return eItemPrimitive; }
+   
+   bool IsConstCollidable() const final { return false; }
+   bool IsCollidable() const final { return m_d.m_collidable; }
 
    void SetDefaultPhysics(const bool fromMouseClick) final;
    void ExportMesh(ObjLoader &loader) final;
@@ -290,9 +290,16 @@ public:
    const Matrix3D &RecalculateMatrices();
    void TransformVertices();
 
-   void setInPlayState(const bool newVal);
+   // Fills 'triangles' with 3 consecutive 2D vertices per mesh triangle, in reversed winding order
+   // (for top-down editor display). TransformVertices() must have been called beforehand.
+   void GetEditorTriangles(vector<Vertex2D> &triangles) const;
 
-   static INT_PTR CALLBACK ObjImportProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+   // Fills 'edges' with pairs of 2D vertices forming the editor wireframe (all edges, or only the
+   // feature edges selected by m_edgeFactorUI), or 'polyline' with a simplified outline used for
+   // large meshes. TransformVertices() must have been called beforehand.
+   void GetEditorWireframe(vector<Vertex2D> &edges, vector<Vertex2D> &polyline) const;
+
+   void setInPlayState(const bool newVal);
 
    Mesh m_mesh;
 
@@ -327,7 +334,6 @@ private:
    int m_compressedAnimationVertices = 0; // only used during loading
 #endif
 
-   bool BrowseFor3DMeshFile();
    void SetupHitObject(class PhysicsEngine *physics, HitObject *obj, const bool isUI);
    void AddHitEdge(class PhysicsEngine *physics, ankerl::unordered_dense::set<std::pair<unsigned, unsigned>> &addedEdges, const unsigned i, const unsigned j, const Vertex3Ds &vi,
       const Vertex3Ds &vj, const bool isUI);

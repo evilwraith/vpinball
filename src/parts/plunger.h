@@ -147,12 +147,10 @@ public:
    STANDARD_EDITABLE_DECLARES(Plunger, eItemPlunger, PLUNGER, VIEW_PLAYFIELD)
 
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
    // Multi-object manipulation
    Vertex2D GetCenter() const final;
    void PutCenter(const Vertex2D &pv) final;
    void SetDefaultPhysics(const bool fromMouseClick) final;
-   ItemTypeEnum HitableGetItemType() const final { return eItemPlunger; }
 
    void WriteRegDefaults() final;
 

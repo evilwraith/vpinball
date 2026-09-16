@@ -5,7 +5,6 @@
 
 #include "core/VPApp.h"
 #include "parts/Collection.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 
 
@@ -41,11 +40,6 @@ void Timer::WriteRegDefaults()
    LinkProp(m_timerEnabled, TimerEnabled);
    LinkProp(m_timerInterval, TimerInterval);
 #undef LinkProp
-}
-
-void Timer::SetObjectPos()
-{
-   m_vpinball->SetObjectPosCur(m_d.m_v.x, m_d.m_v.y);
 }
 
 void Timer::MoveOffset(const float dx, const float dy)

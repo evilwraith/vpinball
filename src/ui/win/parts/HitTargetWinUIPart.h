@@ -12,8 +12,8 @@ public:
 
    void UIRenderPass1(Sur* psur) override;
    void UIRenderPass2(Sur* psur) override;
+   void UpdateStatusBarObjectPos() override;
 
 private:
-   PinTableWnd* const m_editor;
    HitTarget* const m_hittarget;
 };

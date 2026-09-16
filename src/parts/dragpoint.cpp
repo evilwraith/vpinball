@@ -4,6 +4,7 @@
 #include "dragpoint.h"
 
 #include "parts/pintable.h"
+#include "ui/win/PinTableWnd.h"
 #include "ui/win/WinEditor.h"
 
 Vertex3Ds DragPoint::m_copyPoint;
@@ -282,10 +283,13 @@ void IHaveDragPoints::ClearPointsForOverwrite()
 {
    for (size_t i = 0; i < m_vdpoint.size(); i++)
    {
-      if (m_vdpoint[i]->m_selectstate != ISelect::SelectState::NotSelected /*GetPTable()->m_pselcur == m_vdpoint[i]*/)
+      if (PinTableWnd *const tableEditor = GetPTable()->m_tableEditor)
       {
-         //GetPTable()->SetSel(GetPTable());
-         GetPTable()->AddMultiSel(GetPTable(), false, true, false);
+         if (IWinUIPart *const part = tableEditor->GetUIPart(m_vdpoint[i]); part && part->m_selectstate != IWinUIPart::SelectState::NotSelected /*GetPTable()->m_pselcur == m_vdpoint[i]*/)
+         {
+            //GetPTable()->SetSel(GetPTable());
+            tableEditor->AddMultiSel(GetPTable(), false, true, false);
+         }
       }
 
       m_vdpoint[i]->Release();
@@ -360,8 +364,6 @@ void DragPoint::Init(IHaveDragPoints *pihdp, const float x, const float y, const
    m_calcHeight = 0.0f;
    m_autoTexture = true;
    m_texturecoord = 0.0f;
-
-   m_menuid = (pihdp->GetIEditable()->GetItemType() == eItemRubber) ? IDR_POINTMENU_SMOOTH : IDR_POINTMENU;
 }
 
 IEditable *DragPoint::GetIEditable()
@@ -372,23 +374,6 @@ IEditable *DragPoint::GetIEditable()
 const IEditable *DragPoint::GetIEditable() const
 {
    return M_PIHDP->GetIEditable();
-}
-
-void DragPoint::OnLButtonDown(int x, int y)
-{
-   ISelect::OnLButtonDown(x, y);
-   GetPTable()->SetDirtyDraw();
-}
-
-void DragPoint::OnLButtonUp(int x, int y)
-{
-   ISelect::OnLButtonUp(x, y);
-   GetPTable()->SetDirtyDraw();
-}
-
-void DragPoint::SetObjectPos()
-{
-    m_vpinball->SetObjectPosCur(m_v.x, m_v.y);
 }
 
 void DragPoint::MoveOffset(const float dx, const float dy)
@@ -425,51 +410,34 @@ void DragPoint::Uncreate()
    Release();
 }
 
-#ifndef __STANDALONE__
-void DragPoint::EditMenu(CMenu &menu)
+void DragPoint::ToggleSmooth()
 {
-   menu.CheckMenuItem(ID_POINTMENU_SMOOTH, MF_BYCOMMAND | (m_smooth ? MF_CHECKED : MF_UNCHECKED));
-   //EnableMenuItem(hmenu, ID_POINTMENU_SLINGSHOT, MF_BYCOMMAND | (m_fSmooth ? MF_GRAYED : MF_ENABLED));
-   menu.CheckMenuItem(ID_POINTMENU_SLINGSHOT, MF_BYCOMMAND | ((m_slingshot && !m_smooth) ? MF_CHECKED : MF_UNCHECKED));
+   STARTUNDOSELECT
+   m_smooth = !m_smooth;
+   const int index2 = (FindIndexOf(M_PIHDP->m_vdpoint, (CComObject<DragPoint> *)this) - 1 + (int)M_PIHDP->m_vdpoint.size()) % (int)M_PIHDP->m_vdpoint.size();
+   if (m_smooth && m_slingshot)
+   {
+      m_slingshot = false;
+   }
+   if (m_smooth && M_PIHDP->m_vdpoint[index2]->m_slingshot)
+   {
+      M_PIHDP->m_vdpoint[index2]->m_slingshot = false;
+   }
+   STOPUNDOSELECT
 }
 
-void DragPoint::DoCommand(int icmd, int x, int y)
+void DragPoint::ToggleSlingshot()
 {
-   ISelect::DoCommand(icmd, x, y);
-   switch (icmd)
+   STARTUNDOSELECT
+   m_slingshot = !m_slingshot;
+   if (m_slingshot)
    {
-   case ID_POINTMENU_SMOOTH:
-   {
-      STARTUNDOSELECT
-      m_smooth = !m_smooth;
-      const int index2 = (FindIndexOf(M_PIHDP->m_vdpoint, (CComObject<DragPoint> *)this) - 1 + (int)M_PIHDP->m_vdpoint.size()) % (int)M_PIHDP->m_vdpoint.size();
-      if (m_smooth && m_slingshot)
-      {
-         m_slingshot = false;
-      }
-      if (m_smooth && M_PIHDP->m_vdpoint[index2]->m_slingshot)
-      {
-         M_PIHDP->m_vdpoint[index2]->m_slingshot = false;
-      }
-      STOPUNDOSELECT
-      break;
+      m_smooth = false;
+      const int index2 = (FindIndexOf(M_PIHDP->m_vdpoint, (CComObject<DragPoint> *)this) + 1) % M_PIHDP->m_vdpoint.size();
+      M_PIHDP->m_vdpoint[index2]->m_smooth = false;
    }
-   case ID_POINTMENU_SLINGSHOT:
-   {
-      STARTUNDOSELECT
-      m_slingshot = !m_slingshot;
-      if (m_slingshot)
-      {
-         m_smooth = false;
-         const int index2 = (FindIndexOf(M_PIHDP->m_vdpoint, (CComObject<DragPoint> *)this) + 1) % M_PIHDP->m_vdpoint.size();
-         M_PIHDP->m_vdpoint[index2]->m_smooth = false;
-      }
-      STOPUNDOSELECT
-      break;
-   }
-   }
+   STOPUNDOSELECT
 }
-#endif
 
 STDMETHODIMP DragPoint::InterfaceSupportsErrorInfo(REFIID riid)
 {

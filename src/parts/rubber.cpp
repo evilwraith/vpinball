@@ -11,8 +11,6 @@
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
-#include "ui/win/DragPointDialogs.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/objloader.h"
 
@@ -114,10 +112,8 @@ void Rubber::WriteRegDefaults()
 #undef LinkProp
 }
 
-void Rubber::DrawRubberMesh(Sur * const psur)
+void Rubber::GetEditorWireframe(vector<Vertex2D> &edges)
 {
-   vector<Vertex2D> drawVertices;
-
    GenerateMesh(6);
    UpdateRubber(false, m_d.m_height);
 
@@ -128,22 +124,20 @@ void Rubber::DrawRubberMesh(Sur * const psur)
       const Vertex3Ds C = Vertex3Ds(m_vertices[m_ringIndices[i + 2]].x, m_vertices[m_ringIndices[i + 2]].y, m_vertices[m_ringIndices[i + 2]].z);
       if (fabsf(m_vertices[m_ringIndices[i]].nz + m_vertices[m_ringIndices[i + 1]].nz) < 1.f)
       {
-         drawVertices.emplace_back(A.x, A.y);
-         drawVertices.emplace_back(B.x, B.y);
+         edges.emplace_back(A.x, A.y);
+         edges.emplace_back(B.x, B.y);
       }
       if (fabsf(m_vertices[m_ringIndices[i + 1]].nz + m_vertices[m_ringIndices[i + 2]].nz) < 1.f)
       {
-         drawVertices.emplace_back(B.x, B.y);
-         drawVertices.emplace_back(C.x, C.y);
+         edges.emplace_back(B.x, B.y);
+         edges.emplace_back(C.x, C.y);
       }
       if (fabsf(m_vertices[m_ringIndices[i + 2]].nz + m_vertices[m_ringIndices[i]].nz) < 1.f)
       {
-         drawVertices.emplace_back(C.x, C.y);
-         drawVertices.emplace_back(A.x, A.y);
+         edges.emplace_back(C.x, C.y);
+         edges.emplace_back(A.x, A.y);
       }
    }
-   if (!drawVertices.empty())
-      psur->Lines(drawVertices.data(), (int)(drawVertices.size() / 2));
 }
 
 void Rubber::GetBoundingVertices(vector<Vertex3Ds> &bounds, vector<Vertex3Ds> *const legacy_bounds)
@@ -339,6 +333,20 @@ Vertex2D *Rubber::GetSplineVertex(int &pcvertex, bool ** const ppfCross, Vertex2
    return rgvLocal;
 }
 
+void Rubber::GetEditorOutline(vector<Vertex2D> &outline, vector<bool> *crossFlags, const float accuracy) const
+{
+   int cvertex;
+   bool *pfCross = nullptr;
+   Vertex2D *const rgvLocal = GetSplineVertex(cvertex, crossFlags ? &pfCross : nullptr, nullptr, accuracy);
+   if (rgvLocal == nullptr)
+      return;
+   outline.assign(rgvLocal, rgvLocal + cvertex * 2);
+   if (crossFlags && pfCross)
+      crossFlags->assign(pfCross, pfCross + cvertex);
+   delete[] rgvLocal;
+   delete[] pfCross;
+}
+
 // Get an approximation of the curve described by the control points of this ramp.
 void Rubber::GetCentralCurve(vector<RenderVertex> &vv, const float _accuracy) const
 {
@@ -507,11 +515,10 @@ void Rubber::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const bool i
 
 // Ported at: VisualPinball.Engine/VPT/Mesh.cs
 
-void Rubber::AddPoint(int x, int y, const bool smooth)
+void Rubber::AddPoint(const Vertex2D &v, const bool smooth)
 {
     vector<RenderVertex> vvertex;
     GetCentralCurve(vvertex);
-    const Vertex2D v = m_ptable->TransformPoint(x, y);
     Vertex2D vOut;
     int iSeg = -1;
 
@@ -637,11 +644,6 @@ void Rubber::Render(const unsigned int renderMask)
 #pragma endregion
 
 
-void Rubber::SetObjectPos()
-{
-   m_vpinball->SetObjectPosCur(0, 0);
-}
-
 void Rubber::MoveOffset(const float dx, const float dy)
 {
    for (size_t i = 0; i < m_vdpoint.size(); i++)
@@ -730,42 +732,6 @@ void Rubber::Load(IObjectReader& reader)
    if (m_d.m_hitHeight == -1.0f)
       m_d.m_hitHeight = m_d.m_height;
 }
-
-#ifndef __STANDALONE__
-void Rubber::DoCommand(int icmd, int x, int y)
-{
-   ISelect::DoCommand(icmd, x, y);
-
-   switch (icmd)
-   {
-   case ID_WALLMENU_FLIP:
-      FlipPointY(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_MIRROR:
-      FlipPointX(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_ROTATE:
-      VPX::WinUI::RotatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_SCALE:
-      VPX::WinUI::ScalePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_TRANSLATE:
-      VPX::WinUI::TranslatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_ADDPOINT:
-   {
-      AddPoint(x, y, true);
-   }
-   break;
-   }
-}
-#endif
 
 void Rubber::FlipY(const Vertex2D& pvCenter)
 {

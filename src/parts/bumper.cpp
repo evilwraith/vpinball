@@ -14,7 +14,6 @@
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
 #include "renderer/VertexBuffer.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/objloader.h"
 
@@ -533,7 +532,7 @@ void Bumper::GenerateCapMesh(Vertex3D_NoTex2 *buf) const
 void Bumper::UpdateAnimation(const float diff_time_msec)
 {
    if (m_pbumperhitcircle->m_bumperanim_hitEvent)
-      g_pplayer->m_pininput.PlayRumble(0.1f, 0.05f, 100);
+      g_pplayer->m_pininput.PlayBumperRumble();
 
    const int state = m_pbumperhitcircle->m_bumperanim_hitEvent ? 1 : 0; // 0 = not hit, 1 = hit
    m_pbumperhitcircle->m_bumperanim_hitEvent = false;
@@ -626,11 +625,6 @@ void Bumper::UpdateAnimation(const float diff_time_msec)
 
 #pragma endregion
 
-
-void Bumper::SetObjectPos()
-{
-    m_vpinball->SetObjectPosCur(m_d.m_vCenter.x, m_d.m_vCenter.y);
-}
 
 void Bumper::MoveOffset(const float dx, const float dy)
 {

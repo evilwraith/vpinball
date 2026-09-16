@@ -8,9 +8,14 @@
 #include "ui/win/parts/TextboxWinUIPart.h"
 
 TextboxWinUIPart::TextboxWinUIPart(PinTableWnd* editor, Textbox* textbox)
-   : m_editor(editor)
+   : IWinUIPart(editor, textbox)
    , m_textbox(textbox)
 {
+}
+
+void TextboxWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_textbox->m_d.m_v1.x, m_textbox->m_d.m_v1.y);
 }
 
 void TextboxWinUIPart::UIRenderPass1(Sur* const psur)

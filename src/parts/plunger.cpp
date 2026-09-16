@@ -13,7 +13,6 @@
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 
 Plunger::~Plunger()
@@ -143,11 +142,6 @@ void Plunger::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 
 #pragma endregion
 
-
-void Plunger::SetObjectPos()
-{
-   m_vpinball->SetObjectPosCur(m_d.m_v.x, m_d.m_v.y);
-}
 
 void Plunger::MoveOffset(const float dx, const float dy)
 {

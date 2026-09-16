@@ -12,7 +12,6 @@
 #include "renderer/RenderCommand.h"
 #include "renderer/Shader.h"
 #include "ui/live/LiveUI.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/color.h"
 
@@ -57,11 +56,6 @@ HRESULT Ball::Init(const float x, const float y, const bool fromMouseClick, cons
    m_hitBall.m_d.m_pos.y = y;
    m_hitBall.m_d.m_pos.z = m_hitBall.m_d.m_radius;
    return S_OK;
-}
-
-void Ball::SetObjectPos()
-{
-    m_vpinball->SetObjectPosCur(m_hitBall.m_d.m_pos.x, m_hitBall.m_d.m_pos.y);
 }
 
 void Ball::MoveOffset(const float dx, const float dy)

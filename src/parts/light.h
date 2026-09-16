@@ -85,14 +85,13 @@ class Light :
    public IPerPropertyBrowsing // Ability to fill in dropdown in property browser
 {
 public:
-   friend class LightWinUIPart;
 #ifdef __STANDALONE__
    STDMETHOD(GetIDsOfNames)(REFIID /*riid*/, LPOLESTR* rgszNames, UINT cNames, LCID lcid,DISPID* rgDispId);
    STDMETHOD(Invoke)(DISPID dispIdMember, REFIID /*riid*/, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr);
    STDMETHOD(GetDocumentation)(MEMBERID index, BSTR *pBstrName, BSTR *pBstrDocString, DWORD *pdwHelpContext, BSTR *pBstrHelpFile);
    HRESULT FireDispID(const DISPID dispid, DISPPARAMS * const pdispparams) final;
 #endif
-   Light() : m_lightcenter(this) { m_menuid = IDR_SURFACEMENU; m_d.m_depthBias = 0.0f; m_d.m_shape = ShapeCustom; m_d.m_visible = true; }
+   Light() : m_lightcenter(this) { m_d.m_depthBias = 0.0f; m_d.m_shape = ShapeCustom; m_d.m_visible = true; }
    virtual ~Light();
 
    BEGIN_COM_MAP(Light)
@@ -119,14 +118,8 @@ public:
    STDMETHOD(InterfaceSupportsErrorInfo)(REFIID riid);
 
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
 
    void ClearForOverwrite() final;
-
-#ifndef __STANDALONE__
-   void EditMenu(CMenu &menu) final;
-   void DoCommand(int icmd, int x, int y) final;
-#endif
 
    void FlipY(const Vertex2D& pvCenter) final;
    void FlipX(const Vertex2D& pvCenter) final;
@@ -146,10 +139,10 @@ protected:
 
 public:
    float GetDepth(const Vertex3Ds& viewDir) const final;
-   ItemTypeEnum HitableGetItemType() const final { return eItemLight; }
-   void AddPoint(int x, int y, const bool smooth) final;
 
    void WriteRegDefaults() final;
+
+   void AddPoint(const Vertex2D &v, const bool smooth);
 
    void InitShape();
    void setInPlayState(const float newVal);
@@ -164,21 +157,16 @@ public:
    float m_surfaceHeight;
    bool  m_lockedByLS = false;
 
+   // ISelect of the light center handle, for editor picking
+   ISelect *GetLightCenterSelect() { return &m_lightcenter; }
+
 private:
    class LightCenter final : public ISelect
    {
    public:
       LightCenter(Light *plight) : m_plight(plight) { }
 
-      bool IsUILocked() const override { return m_uiLocked; }
-      void SetUILock(bool lock) override { m_uiLocked = lock; }
-      bool IsUIVisible() const override { return m_uiVisible; }
-      void SetUIVisible(bool visible) override { m_uiVisible = visible; }
-
       HRESULT GetTypeName(BSTR *pVal) const override { return m_plight->GetTypeName(pVal); }
-
-      IDispatch *GetIDispatch() override { return m_plight->GetIDispatch(); }
-      const IDispatch *GetIDispatch() const override { return m_plight->GetIDispatch(); }
 
       void Delete() override { m_plight->Delete(); }
       void Uncreate() override { m_plight->Uncreate(); }
@@ -203,8 +191,6 @@ private:
 
    private:
       Light *m_plight;
-      bool m_uiLocked = false; // Can not be dragged in the editor
-      bool m_uiVisible = true; // UI visibility (not the same as rendering visibility which is a member of part data)
    };
 
    Material *m_surfaceMaterial;

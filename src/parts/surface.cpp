@@ -12,8 +12,6 @@
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
 #include "renderer/VertexBuffer.h"
-#include "ui/win/DragPointDialogs.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/objloader.h"
 
@@ -945,11 +943,9 @@ void Surface::RenderWallsAtHeight(const bool drop, const bool isReflectionPass)
    m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::fDisableLighting_top_below, 0.f, 0.f, 0.f, 0.f);
 }
 
-void Surface::AddPoint(int x, int y, const bool smooth)
+void Surface::AddPoint(const Vertex2D &v, const bool smooth)
 {
    STARTUNDO
-
-   const Vertex2D v = m_ptable->TransformPoint(x, y);
 
    vector<RenderVertex> vvertex;
    GetRgVertex(vvertex);
@@ -975,40 +971,6 @@ void Surface::AddPoint(int x, int y, const bool smooth)
 
    STOPUNDO
 }
-
-#ifndef __STANDALONE__
-void Surface::DoCommand(int icmd, int x, int y)
-{
-   ISelect::DoCommand(icmd, x, y);
-
-   switch (icmd)
-   {
-   case ID_WALLMENU_FLIP:
-      FlipPointY(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_MIRROR:
-      FlipPointX(GetPointCenter());
-      break;
-
-   case ID_WALLMENU_ROTATE:
-      VPX::WinUI::RotatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_SCALE:
-      VPX::WinUI::ScalePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_TRANSLATE:
-      VPX::WinUI::TranslatePointsDialog(this);
-      break;
-
-   case ID_WALLMENU_ADDPOINT:
-      AddPoint(x, y, false);
-      break;
-   }
-}
-#endif
 
 void Surface::FlipY(const Vertex2D& pvCenter)
 {

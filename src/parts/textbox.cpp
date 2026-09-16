@@ -9,7 +9,6 @@
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
 #include "renderer/trace.h"
-#include "ui/win/sur.h"
 #include "ui/win/WinEditor.h"
 #include "utils/color.h"
 
@@ -45,7 +44,6 @@ void Textbox::SetDefaults(const bool fromMouseClick)
    LinkProp(m_d.m_fontcolor, FontColor);
    LinkProp(m_d.m_transparent, Transparent);
    LinkProp(m_d.m_isDMD, DMD);
-   LinkProp(m_d.m_backcolor, BackColor);
    LinkProp(m_d.m_intensity_scale, IntensityScale);
    LinkProp(m_d.m_text, Text);
    LinkProp(m_d.m_talign, TextAlignment);
@@ -74,7 +72,6 @@ void Textbox::WriteRegDefaults()
    LinkProp(m_d.m_fontcolor, FontColor);
    LinkProp(m_d.m_transparent, Transparent);
    LinkProp(m_d.m_isDMD, DMD);
-   LinkProp(m_d.m_backcolor, BackColor);
    LinkProp(m_d.m_intensity_scale, IntensityScale);
    LinkProp(m_d.m_text, Text);
    LinkProp(m_d.m_talign, TextAlignment);
@@ -165,11 +162,6 @@ STDMETHODIMP Textbox::InterfaceSupportsErrorInfo(REFIID riid)
          return S_OK;
 
    return S_FALSE;
-}
-
-void Textbox::SetObjectPos()
-{
-    m_vpinball->SetObjectPosCur(m_d.m_v1.x, m_d.m_v1.y);
 }
 
 void Textbox::MoveOffset(const float dx, const float dy)
@@ -478,7 +470,11 @@ STDMETHODIMP Textbox::get_BackColor(OLE_COLOR *pVal)
 
 STDMETHODIMP Textbox::put_BackColor(OLE_COLOR newVal)
 {
-   m_d.m_backcolor = newVal;
+   if (m_d.m_backcolor != newVal)
+   {
+      m_textureDirty = true;
+      m_d.m_backcolor = newVal;
+   }
    return S_OK;
 }
 
@@ -490,7 +486,11 @@ STDMETHODIMP Textbox::get_FontColor(OLE_COLOR *pVal)
 
 STDMETHODIMP Textbox::put_FontColor(OLE_COLOR newVal)
 {
-   m_d.m_fontcolor = newVal;
+   if (m_d.m_fontcolor != newVal)
+   {
+      m_textureDirty = true;
+      m_d.m_fontcolor = newVal;
+   }
    return S_OK;
 }
 
@@ -623,7 +623,11 @@ STDMETHODIMP Textbox::get_Alignment(TextAlignment *pVal)
 
 STDMETHODIMP Textbox::put_Alignment(TextAlignment newVal)
 {
-   m_d.m_talign = newVal;
+   if (m_d.m_talign != newVal)
+   {
+      m_textureDirty = true;
+      m_d.m_talign = newVal;
+   }
    return S_OK;
 }
 

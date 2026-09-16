@@ -8,9 +8,14 @@
 #include "ui/win/parts/LightSeqWinUIPart.h"
 
 LightSeqWinUIPart::LightSeqWinUIPart(PinTableWnd* editor, LightSeq* lightseq)
-   : m_editor(editor)
+   : IWinUIPart(editor, lightseq)
    , m_lightseq(lightseq)
 {
+}
+
+void LightSeqWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_lightseq->m_d.m_v.x, m_lightseq->m_d.m_v.y);
 }
 
 void LightSeqWinUIPart::UIRenderPass1(Sur* const psur)

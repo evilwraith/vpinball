@@ -27,32 +27,26 @@ public:
    void Init(IHaveDragPoints *pihdp, const float x, const float y, const float z, const bool smooth);
 
    // From ISelect
-   void OnLButtonDown(int x, int y) final;
-   void OnLButtonUp(int x, int y) final;
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
+   static inline constexpr ItemTypeEnum ItemType = eItemDragPoint;
    ItemTypeEnum GetItemType() const final { return eItemDragPoint; }
 
    // Multi-object manipulation
    Vertex2D GetCenter() const final;
    void PutCenter(const Vertex2D &pv) final;
 
-#ifndef __STANDALONE__
-   void EditMenu(CMenu &menu) final;
-   void DoCommand(int icmd, int x, int y) final;
-#endif
-
    IEditable *GetIEditable() final;
    const IEditable *GetIEditable() const final;
    PinTable *GetPTable() final { return GetIEditable()->GetPTable(); }
    const PinTable *GetPTable() const final { return GetIEditable()->GetPTable(); }
-   IDispatch *GetIDispatch() final { return (IDispatch *)this; }
-   const IDispatch *GetIDispatch() const final { return (const IDispatch *)this; }
 
    int GetSelectLevel() const final { return 2; } // So dragpoints won't be band-selected with the main objects
 
    void Copy();
    void Paste();
+
+   void ToggleSmooth();
+   void ToggleSlingshot();
 
    BEGIN_COM_MAP(DragPoint)
       COM_INTERFACE_ENTRY(IDispatch)
@@ -94,11 +88,6 @@ public:
    bool m_smooth;
    bool m_slingshot;
    bool m_autoTexture;
-
-   bool IsUILocked() const final { return m_uiLocked; }
-   void SetUILock(bool lock) final { m_uiLocked = lock; }
-   bool IsUIVisible() const final { return m_uiVisible; }
-   void SetUIVisible(bool visible) final { m_uiVisible = visible; }
 
    bool m_uiLocked = false; // Can not be dragged in the editor
    bool m_uiVisible = true; // UI visibility (not the same as rendering visibility which is a member of part data)

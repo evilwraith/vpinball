@@ -147,19 +147,16 @@ public:
 
    DECLARE_REGISTRY_RESOURCEID(IDR_BALL)
 
+   // IHitable implementation
    bool PhysicUpdate(class PhysicsEngine *physics, const bool isUI) final;
 
    // ISelect implementation
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
    Vertex2D GetCenter() const final;
    void PutCenter(const Vertex2D &pv) final;
 
    // IEditable implementation
    void WriteRegDefaults() final;
-
-   // IHitable implementation
-   ItemTypeEnum HitableGetItemType() const final { return eItemBall; }
 
    // IBall implementation
    STDMETHOD(get_FrontDecal)(/*[out, retval]*/ BSTR *pVal);

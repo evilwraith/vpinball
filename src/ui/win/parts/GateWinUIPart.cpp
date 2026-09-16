@@ -8,9 +8,14 @@
 #include "ui/win/parts/GateWinUIPart.h"
 
 GateWinUIPart::GateWinUIPart(PinTableWnd* editor, Gate* gate)
-   : m_editor(editor)
+   : IWinUIPart(editor, gate)
    , m_gate(gate)
 {
+}
+
+void GateWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_gate->m_d.m_vCenter.x, m_gate->m_d.m_vCenter.y);
 }
 
 void GateWinUIPart::UIRenderPass1(Sur* const psur)

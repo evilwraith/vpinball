@@ -54,7 +54,6 @@ class Ramp :
    public IPerPropertyBrowsing // Ability to fill in dropdown in property browser
 {
 public:
-   friend class RampWinUIPart;
 #ifdef __STANDALONE__
    STDMETHOD(GetIDsOfNames)(REFIID /*riid*/, LPOLESTR* rgszNames, UINT cNames, LCID lcid,DISPID* rgDispId);
    STDMETHOD(Invoke)(DISPID dispIdMember, REFIID /*riid*/, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr);
@@ -63,7 +62,6 @@ public:
 #endif
    Ramp()
    {
-      m_menuid = IDR_SURFACEMENU;
       m_d.m_collidable = true;
       m_d.m_visible = true;
       m_d.m_depthBias = 0.0f;
@@ -101,11 +99,6 @@ public:
    void ClearForOverwrite() final;
 
    void MoveOffset(const float dx, const float dy) final;
-   void SetObjectPos() final;
-
-#ifndef __STANDALONE__
-   void DoCommand(int icmd, int x, int y) final;
-#endif
 
    int GetMinimumPoints() const final { return 2; }
 
@@ -121,16 +114,21 @@ public:
    void GetBoundingVertices(vector<Vertex3Ds> &bounds, vector<Vertex3Ds> *const legacy_bounds) final;
 
    float GetDepth(const Vertex3Ds &viewDir) const final;
-   ItemTypeEnum HitableGetItemType() const final { return eItemRamp; }
    void SetDefaultPhysics(const bool fromMouseClick) final;
    void ExportMesh(ObjLoader &loader) final;
-   void AddPoint(int x, int y, const bool smooth) final;
    void UpdateStatusBarInfo() final;
 
    void WriteRegDefaults() final;
 
+   void AddPoint(const Vertex2D &v, const bool smooth);
+
    float GetSurfaceHeight(float x, float y) const;
    bool IsHabitrail() const;
+
+   // Computes the vertices and additional information for the ramp shape.
+   // Also refreshes the drag points' m_calcHeight display cache (derived value, written through the owned DragPoint pointers)
+   Vertex2D *GetRampVertex(
+      int &pcvertex, float **const ppheight, bool **const ppfCross, float **const ppratio, Vertex2D **const pMiddlePoints, const float _accuracy, const bool inc_width) const;
 
    RampData m_d;
 
@@ -174,10 +172,10 @@ private:
       IHaveDragPoints::GetRgVertex(vv, false, accuracy);
    }
 
-   Vertex2D *GetRampVertex(int &pcvertex, float ** const ppheight, bool ** const ppfCross, float ** const ppratio, Vertex2D **const pMiddlePoints, const float _accuracy, const bool inc_width);
    void PrepareHabitrail();
 
-   void AssignHeightToControlPoint(const RenderVertex3D &v, const float height);
+   // Updates the m_calcHeight display cache of matching drag points (derived value, written through the owned DragPoint pointers)
+   void AssignHeightToControlPoint(const RenderVertex3D &v, const float height) const;
 
    void AddJoint(class PhysicsEngine *physics, const Vertex3Ds &v1, const Vertex3Ds &v2, const bool isUI);
    void AddJoint2D(class PhysicsEngine *physics, const Vertex2D &p, const float zlow, const float zhigh, const bool isUI);

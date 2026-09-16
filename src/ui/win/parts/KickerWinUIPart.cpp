@@ -9,9 +9,14 @@
 
 
 KickerWinUIPart::KickerWinUIPart(PinTableWnd* editor, Kicker* kicker)
-   : m_editor(editor)
+   : IWinUIPart(editor, kicker)
    , m_kicker(kicker)
 {
+}
+
+void KickerWinUIPart::UpdateStatusBarObjectPos()
+{
+   SetStatusBarObjectPos(m_kicker->m_d.m_vCenter.x, m_kicker->m_d.m_vCenter.y);
 }
 
 void KickerWinUIPart::UIRenderPass1(Sur* const psur)
