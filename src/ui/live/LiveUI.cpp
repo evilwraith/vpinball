@@ -453,27 +453,6 @@ void LiveUI::RenderUI()
    else
 #endif
    matView[0] = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, bottom, 0.f, 0.f, 1.f);
-#if defined(ENABLE_BGFX) && defined(__RK3588__)
-   // One-shot dump of everything that feeds the UI transform (HDP 2026-09-16: the in-game UI
-   // renders SHEARED -- horizontals slope, verticals stay vertical -- while the fork's UI code is
-   // byte-identical to upstream's outside the two known blocks). CPU-only, once per UI open.
-   if (RenderDevice::AreFrameStatsEnabled())
-   {
-      static bool s_dumped = false;
-      if (!s_dumped && m_editorUI.IsOpened() == false && ImGui::GetIO().DisplaySize.x > 0.f)
-      {
-         s_dumped = true;
-         const RenderTarget* const rt = m_rd->GetCurrentPass() ? m_rd->GetCurrentPass()->m_rt : nullptr;
-         const float* m = &matView[0]._11;
-         PLOGI.printf("[4kpDebug][ui_xform] rotate=%d display=%.0fx%.0f fbscale=%.3fx%.3f rt=%dx%d (%s) scanout=%d uiScale=%.3f scanoutScale=%.3f right=%.0f bottom=%.0f",
-            m_rotate, io.DisplaySize.x, io.DisplaySize.y, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y,
-            rt ? rt->GetWidth() : -1, rt ? rt->GetHeight() : -1, rt ? rt->m_name.c_str() : "none",
-            m_rd->IsCurrentPassScanout() ? 1 : 0, m_uiScale, m_player->m_playfieldWnd->GetScanoutScale(), right, bottom);
-         PLOGI.printf("[4kpDebug][ui_xform] matView = [%.5f %.5f %.5f %.5f | %.5f %.5f %.5f %.5f | %.5f %.5f %.5f %.5f | %.3f %.3f %.3f %.3f]",
-            m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
-      }
-   }
-#endif
    if (m_rd->m_nEyes == 2)
       matView[1] = matView[0];  
    m_rd->m_uiShader->SetMatrix(ShaderUniform::matWorldView, &matView[0], m_rd->m_nEyes);
