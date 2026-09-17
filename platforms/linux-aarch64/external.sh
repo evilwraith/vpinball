@@ -87,8 +87,9 @@ if [ "${SDL3_EXPECTED_SHA}" != "${SDL3_FOUND_SHA}" ]; then
       -DSDL_SHARED=ON \
       -DSDL_STATIC=OFF \
       -DSDL_TEST_LIBRARY=OFF \
-      -DSDL_X11=ON \
+      -DSDL_X11=OFF \
       -DSDL_KMSDRM=ON \
+      -DSDL_UNIX_CONSOLE_BUILD=ON \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
    cmake --build build -- -j${NUM_PROCS}
